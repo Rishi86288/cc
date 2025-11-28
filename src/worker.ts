@@ -10,6 +10,7 @@ type Bindings = {
   EMAILJS_TEMPLATE_ID: string;
   EMAILJS_PUBLIC_KEY: string;
   ADMIN_SECRET_KEY: string;
+  OTP_KV: KVNamespace;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -34,14 +35,11 @@ async function sendEmail(env: Bindings, toEmail: string, otpCode: string) {
 
 // --- AUTHENTICATION ---
 
-// Login (Password + Super Admin OTP Check)
 app.post('/api/auth/login', async (c) => {
     const { email, password } = await c.req.json();
     
-    // Super Admin Security Check
     if (email === c.env.SUPER_ADMIN_EMAIL) {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        // Store OTP in D1 (better than KV for consistency)
         await c.env.DB.prepare("INSERT OR REPLACE INTO otps (email, code, expires_at) VALUES (?, ?, ?)").bind(email, otp, Date.now() + 300000).run();
         await sendEmail(c.env, email, otp);
         return c.json({ status: 'OTP_REQUIRED' });
@@ -52,7 +50,6 @@ app.post('/api/auth/login', async (c) => {
     return c.json({ status: 'SUCCESS', user });
 });
 
-// Verify OTP
 app.post('/api/auth/verify-otp', async (c) => {
     const { email, otp } = await c.req.json();
     const record = await c.env.DB.prepare("SELECT * FROM otps WHERE email = ?").bind(email).first();
@@ -64,7 +61,6 @@ app.post('/api/auth/verify-otp', async (c) => {
     return c.json({ error: "Invalid or Expired OTP" }, 403);
 });
 
-// Google Auth Sync
 app.post('/api/auth/sync', async (c) => {
     const { uid, email, name, branch } = await c.req.json();
     let user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
@@ -76,11 +72,9 @@ app.post('/api/auth/sync', async (c) => {
     return c.json(user);
 });
 
-// Manual Registration
 app.post('/api/auth/register', async (c) => {
     const { name, email, password, role, branch, phone, secretCode } = await c.req.json();
     
-    // Admin Secret Check
     if ((role === 'super_admin' || role === 'event_admin') && secretCode !== c.env.ADMIN_SECRET_KEY) {
         return c.json({ error: "Invalid Admin Secret Key" }, 403);
     }
@@ -129,6 +123,38 @@ app.put('/api/files', async (c) => {
         return c.json({ success: true });
     }
     return c.json({ error: "No file" }, 400);
+});
+
+app.delete('/api/files/:name', async (c) => {
+    const name = c.req.param('name');
+    await c.env.FILES_BUCKET.delete(decodeURIComponent(name));
+    return c.json({ success: true });
+});
+
+// --- USER & ADMIN FEATURES ---
+
+app.put('/api/user/profile', async (c) => {
+    const { name, branch, phone, email } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET name=?, branch=?, phone=? WHERE email=?").bind(name, branch, phone, email).run();
+    return c.json({ success: true });
+});
+
+app.post('/api/user/upgrade', async (c) => {
+    const { id } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET upgrade_status='pending' WHERE id=?").bind(id).run();
+    return c.json({ success: true });
+});
+
+app.get('/api/admin/upgrades', async (c) => {
+    const { results } = await c.env.DB.prepare("SELECT * FROM users WHERE upgrade_status='pending'").all();
+    return c.json(results);
+});
+
+app.post('/api/admin/approve', async (c) => {
+    const { userId, secret } = await c.req.json();
+    if(secret !== c.env.ADMIN_SECRET_KEY) return c.json({ error: "Invalid Key" }, 403);
+    await c.env.DB.prepare("UPDATE users SET role='event_admin', upgrade_status='approved' WHERE id=?").bind(userId).run();
+    return c.json({ success: true });
 });
 
 export default app;
