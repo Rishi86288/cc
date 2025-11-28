@@ -10,9 +10,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; // Cloudflare Pages Proxy
-
-// --- 1. FIREBASE CONFIG (!!! MUST REPLACE THESE WITH YOUR ACTUAL KEYS !!!) ---
+const API_BASE_URL = "/api"; // Proxy to Worker
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE",
@@ -24,17 +22,18 @@ const firebaseConfig = {
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM"
 };
-
 // Initialize Firebase
+let auth: any = null;
 try {
+    // Only initialize if keys are present (avoids crash during compilation)
     if (!firebaseConfig.apiKey.includes('YOUR_FIREBASE_API_KEY')) {
-        initializeApp(firebaseConfig);
+        const app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
     }
 } catch (e) {
     console.error("Firebase initialization failed. Did you update firebaseConfig?");
 }
 
-const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- ROBUST API HELPER ---
@@ -42,6 +41,7 @@ const fetchJson = async (url: string, options: any = {}) => {
     try {
         const res = await fetch(url, options);
         const contentType = res.headers.get("content-type");
+        
         if (contentType && contentType.indexOf("application/json") !== -1) {
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || "Server Error");
@@ -73,6 +73,7 @@ const api = {
     // Admin Actions
     getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
     approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
 };
 
 // --- COMPONENTS ---
@@ -101,7 +102,6 @@ const Header = ({ user, setView, logout }: any) => (
     </div>
 );
 
-// --- COMPONENT: Auth (Login/Register/OTP) ---
 const Auth = ({ mode, setView, onAuth }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '' });
     const [error, setError] = useState('');
@@ -114,7 +114,8 @@ const Auth = ({ mode, setView, onAuth }: any) => {
         try {
             await onAuth(mode, data);
         } catch(err: any) {
-            setError(err.message);
+            // Firebase errors return as Error objects, set them for display
+            setError(err.message || 'Authentication failed. Check console for details.');
         } finally {
             setLoading(false);
         }
@@ -297,7 +298,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                         </div>
                         {user.role === 'student' && (
                             <div className="bg-white p-6 rounded shadow border border-blue-100 flex justify-between items-center">
-                                <div><h3 className="font-bold text-[#003366]">Student Corner</h3><p className="text-sm text-gray-600">Request access to become an Event Admin.</p></div>
+                                <div><h3 className="font-bold text-[#003366]">Become Event Admin</h3><p className="text-sm text-gray-600">Organize workshops and manage registrations.</p></div>
                                 {user.upgrade_status === 'pending' ? <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm font-bold">Pending</span> : <button onClick={handleUpgrade} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow hover:bg-yellow-400">Request Upgrade</button>}
                             </div>
                         )}
@@ -356,33 +357,9 @@ const App = () => {
     const handleAuth = async (mode: string, data: any) => {
         try {
             let res;
-            if (mode === 'google') {
-                const result = await signInWithPopup(auth, googleProvider);
-                res = await api.syncUser({ 
-                    uid: result.user.uid, 
-                    email: result.user.email, 
-                    name: result.user.displayName,
-                    branch: data.branch || 'General' // Use default branch for first sync
-                });
-            }
-            else if (mode === 'login') {
-                await signInWithEmailAndPassword(auth, data.email, data.password);
-                // Worker only checks D1 for user role/profile
-                res = await api.syncUser({ email: data.email }); 
-            }
-            else {
-                // Register via Firebase
-                const result = await createUserWithEmailAndPassword(auth, data.email, data.password);
-                // Sync data to D1
-                res = await api.syncUser({ 
-                    uid: result.user.uid, 
-                    email: data.email, 
-                    name: data.name, 
-                    branch: data.branch, 
-                    role: data.roleType,
-                    secretCode: data.secretCode // For initial Admin role assignment in Worker
-                });
-            }
+            if (mode === 'google') res = await api.googleLogin(data.email, data.name);
+            else if (mode === 'login') res = await api.login(data.email, data.password);
+            else res = await api.register(data);
 
             if (res.status === 'OTP_REQUIRED') { 
                 const otp = prompt("Enter OTP sent to Email:"); 
@@ -396,26 +373,12 @@ const App = () => {
             } else {
                 throw new Error("Unknown Auth Error");
             }
-        } catch(e: any) { 
-            // Firebase Auth errors (auth/invalid-email, etc.)
-            let displayError = e.message;
-            if (e.code && e.code.includes('auth/')) {
-                displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
-            }
-            alert(displayError); 
-        }
-    };
-
-    const handleSignOut = () => {
-        signOut(auth).then(() => {
-            setUser(null);
-            setView('home');
-        }).catch(err => alert(err.message));
+        } catch(e: any) { alert(e.message); }
     };
 
     return (
         <div className="min-h-screen flex flex-col bg-[#f4f7f6]">
-            <Header user={user} setView={setView} logout={handleSignOut} />
+            <Header user={user} setView={setView} logout={() => setUser(null)} />
             {view === 'home' && (
                 <div className="flex-grow max-w-7xl mx-auto px-4 py-12">
                    <h1 className="text-4xl font-bold text-center mb-12 text-[#003366]">Upcoming Events</h1>
@@ -431,7 +394,7 @@ const App = () => {
             )}
             {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
             {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
-            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
+            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={() => setUser(null)} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
     );
