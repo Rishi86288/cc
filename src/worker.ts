@@ -1,159 +1,168 @@
-import { D1Database, R2Bucket, KVNamespace } from '@cloudflare/workers-types';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 
-export interface Env {
+type Bindings = {
   DB: D1Database;
   FILES_BUCKET: R2Bucket;
-  OTP_KV: KVNamespace;
   SUPER_ADMIN_EMAIL: string;
   FACULTY_SECRET_KEY: string;
   EMAILJS_SERVICE_ID: string;
   EMAILJS_TEMPLATE_ID: string;
   EMAILJS_PUBLIC_KEY: string;
   ADMIN_SECRET_KEY: string;
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const method = request.method;
-    
-    // CORS Headers
-    const headers = { 
-      "Access-Control-Allow-Origin": "*", 
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS", 
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Content-Type": "application/json" 
-    };
-
-    if (method === "OPTIONS") return new Response(null, { headers });
-
-    // ROBUST PATH HANDLING
-    // Removes '/api' if present, so '/api/auth/login' becomes '/auth/login'
-    const path = url.pathname.replace(/^\/api/, '');
-
-    try {
-        // --- 1. AUTHENTICATION ---
-        
-        // LOGIN
-        if (path === "/auth/login" && method === "POST") {
-            const { email, password } = await request.json() as any;
-            
-            // Super Admin Check
-            if (email === env.SUPER_ADMIN_EMAIL) { 
-                const otp = Math.floor(100000 + Math.random() * 900000).toString();
-                await env.OTP_KV.put(email, otp, { expirationTtl: 300 });
-                await sendEmailJS(env, email, otp);
-                return new Response(JSON.stringify({ status: 'OTP_REQUIRED' }), { headers });
-            }
-
-            const user = await env.DB.prepare("SELECT * FROM users WHERE email = ? AND password = ?").bind(email, password).first();
-            if(!user) return new Response(JSON.stringify({ error: "Invalid Credentials" }), { status: 401, headers });
-            
-            return new Response(JSON.stringify({ status: 'SUCCESS', user }), { headers });
-        }
-
-        // GOOGLE SYNC
-        if (path === "/auth/sync" && method === "POST") {
-            const { uid, email, name, branch } = await request.json() as any;
-            let user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-            
-            if (!user) {
-                await env.DB.prepare("INSERT INTO users (id, name, email, role, branch, auth_provider, created_at) VALUES (?, ?, ?, 'student', ?, 'google', ?)").bind(uid, name, email, branch, Date.now()).run();
-                user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-            }
-            return new Response(JSON.stringify({ status: 'SUCCESS', user }), { headers });
-        }
-
-        // REGISTER
-        if (path === "/auth/register" && method === "POST") {
-            const data: any = await request.json();
-            
-            if ((data.roleType === 'super_admin' || data.roleType === 'event_admin') && data.secretCode !== env.ADMIN_SECRET_KEY) {
-                return new Response(JSON.stringify({ error: "Invalid Admin Secret Key" }), { status: 403, headers });
-            }
-
-            try {
-                const id = crypto.randomUUID();
-                await env.DB.prepare("INSERT INTO users (id, name, email, password, role, branch, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, data.name, data.email, data.password, data.roleType, data.branch, data.phone || '', Date.now()).run();
-                return new Response(JSON.stringify({ status: 'SUCCESS', user: { id, ...data } }), { headers });
-            } catch { return new Response(JSON.stringify({ error: "Email already exists" }), { status: 400, headers }); }
-        }
-
-        // VERIFY OTP
-        if (path === "/auth/verify-otp" && method === "POST") {
-            const { email, otp } = await request.json() as any;
-            const stored = await env.OTP_KV.get(email);
-            if (stored === otp) {
-                await env.OTP_KV.delete(email);
-                return new Response(JSON.stringify({ status: 'SUCCESS', user: { id: 'super_admin', name: "Super Admin", email, role: "super_admin", branch: "ADMIN" } }), { headers });
-            }
-            return new Response(JSON.stringify({ error: "Invalid OTP" }), { status: 403, headers });
-        }
-
-        // --- 2. EVENTS ---
-        if (path === "/events" && method === "GET") {
-            const { results } = await env.DB.prepare("SELECT * FROM events ORDER BY created_at DESC").all();
-            return new Response(JSON.stringify(results), { headers });
-        }
-
-        if (path === "/events" && method === "POST") {
-            const formData = await request.formData();
-            const file = formData.get('attachment');
-            let url = null;
-
-            if(file && typeof file === 'object') {
-                const name = `${Date.now()}-${file.name}`;
-                await env.FILES_BUCKET.put(name, file.stream());
-                url = name;
-            }
-
-            await env.DB.prepare("INSERT INTO events (id, title, date, branch, fee, is_paid, description, attachment_url, created_by_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
-              crypto.randomUUID(), formData.get('title'), formData.get('date'), formData.get('branch'), formData.get('fee'), 
-              formData.get('isPaid') === 'true' ? 1 : 0, formData.get('desc'), url, formData.get('userEmail'), Date.now()
-            ).run();
-            
-            return new Response(JSON.stringify({ success: true }), { headers });
-        }
-        
-        // --- 3. FILES ---
-        if (path === "/files" && method === "GET") {
-             const list = await env.FILES_BUCKET.list();
-             const files = list.objects.map(o => ({ name: o.key, size: o.size, date: o.uploaded }));
-             return new Response(JSON.stringify(files), { headers });
-        }
-
-        if (path === "/files" && method === "PUT") {
-             const formData = await request.formData();
-             const file = formData.get('file') as File;
-             if(file) await env.FILES_BUCKET.put(file.name, file.stream());
-             return new Response(JSON.stringify({ success: true }), { headers });
-        }
-        
-        if (path.startsWith("/files/") && method === "DELETE") {
-            const name = path.split('/').pop();
-            if(name) await env.FILES_BUCKET.delete(decodeURIComponent(name));
-             return new Response(JSON.stringify({ success: true }), { headers });
-        }
-
-        return new Response("Not Found", { status: 404, headers });
-
-    } catch (e: any) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
-    }
-  }
+  OTP_KV: KVNamespace;
 };
 
-async function sendEmailJS(env: Env, to: string, otp: string) {
+const app = new Hono<{ Bindings: Bindings }>();
+
+// Enable CORS for all routes
+app.use('/*', cors());
+
+const uuid = () => crypto.randomUUID();
+
+// --- EMAIL HELPER ---
+async function sendEmail(env: Bindings, toEmail: string, otpCode: string) {
+  const url = 'https://api.emailjs.com/api/v1.0/email/send';
+  const data = {
+    service_id: env.EMAILJS_SERVICE_ID,
+    template_id: env.EMAILJS_TEMPLATE_ID,
+    user_id: env.EMAILJS_PUBLIC_KEY,
+    template_params: { to_email: toEmail, otp: otpCode }
+  };
   try {
-    await fetch('https://api.emailjs.com/api/v1.0/email/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        service_id: env.EMAILJS_SERVICE_ID,
-        template_id: env.EMAILJS_TEMPLATE_ID,
-        user_id: env.EMAILJS_PUBLIC_KEY,
-        template_params: { to_email: to, otp: otp }
-      })
-    });
-  } catch (e) { console.error(e); }
+    await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    return true;
+  } catch { return false; }
 }
+
+// --- API ROUTES ---
+// We define routes WITHOUT /api prefix because Hono is mounted at the worker root.
+// The manual path replacement in the previous version was error-prone.
+// Hono handles the routing automatically.
+
+// 1. Login
+app.post('/auth/login', async (c) => {
+    const { email, password } = await c.req.json();
+    
+    if (email === c.env.SUPER_ADMIN_EMAIL) {
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        await c.env.OTP_KV.put(email, otp, { expirationTtl: 300 });
+        await sendEmail(c.env, email, otp);
+        return c.json({ status: 'OTP_REQUIRED' });
+    }
+
+    const user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ? AND password = ?").bind(email, password).first();
+    if (!user) return c.json({ error: "Invalid Credentials" }, 401);
+    return c.json({ status: 'SUCCESS', user });
+});
+
+// 2. Verify OTP
+app.post('/auth/verify-otp', async (c) => {
+    const { email, otp } = await c.req.json();
+    const stored = await c.env.OTP_KV.get(email);
+    if (stored === otp) {
+        await c.env.OTP_KV.delete(email);
+        // Return Super Admin Profile
+        return c.json({ status: 'SUCCESS', user: { id: 'super_admin', name: "Super Admin", email, role: "super_admin", branch: "ADMIN" } });
+    }
+    return c.json({ error: "Invalid OTP" }, 403);
+});
+
+// 3. Google Sync
+app.post('/auth/sync', async (c) => {
+    const { uid, email, name, branch } = await c.req.json();
+    let user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    
+    if (!user) {
+        await c.env.DB.prepare("INSERT INTO users (id, name, email, role, branch, auth_provider, created_at) VALUES (?, ?, ?, 'student', ?, 'google', ?)").bind(uid, name, email, branch, Date.now()).run();
+        user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    }
+    return c.json(user);
+});
+
+// 4. Register
+app.post('/auth/register', async (c) => {
+    const { name, email, password, role, branch, phone, secretCode } = await c.req.json();
+    
+    if ((role === 'super_admin' || role === 'event_admin') && secretCode !== c.env.ADMIN_SECRET_KEY) {
+        return c.json({ error: "Invalid Secret" }, 403);
+    }
+
+    try {
+        const id = uuid();
+        await c.env.DB.prepare("INSERT INTO users (id, name, email, password, role, branch, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, name, email, password, role, branch, phone, Date.now()).run();
+        return c.json({ status: 'SUCCESS', user: { id, name, email, role, branch } });
+    } catch { return c.json({ error: "Email exists" }, 400); }
+});
+
+// 5. Events
+app.get('/events', async (c) => {
+    const { results } = await c.env.DB.prepare("SELECT * FROM events ORDER BY created_at DESC").all();
+    return c.json(results);
+});
+
+app.post('/events', async (c) => {
+    const body = await c.req.parseBody();
+    const file = body['attachment'];
+    let url = null;
+
+    if (file instanceof File) {
+        const name = `${Date.now()}-${file.name}`;
+        await c.env.FILES_BUCKET.put(name, file.stream());
+        url = name;
+    }
+
+    await c.env.DB.prepare(`INSERT INTO events (id, title, date, branch, fee, is_paid, description, attachment_url, created_by_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(uuid(), body['title'], body['date'], body['branch'], body['fee'], body['isPaid'] === 'true' ? 1 : 0, body['desc'], url, body['userEmail'], Date.now()).run();
+
+    return c.json({ success: true });
+});
+
+// 6. Files
+app.get('/files', async (c) => {
+    const list = await c.env.FILES_BUCKET.list();
+    return c.json(list.objects.map(o => ({ name: o.key, size: o.size, date: o.uploaded })));
+});
+
+app.put('/files', async (c) => {
+    const body = await c.req.parseBody();
+    const file = body['file'];
+    if (file instanceof File) {
+        await c.env.FILES_BUCKET.put(file.name, file.stream());
+        return c.json({ success: true });
+    }
+    return c.json({ error: "No file" }, 400);
+});
+
+app.delete('/files/:name', async (c) => {
+    const name = c.req.param('name');
+    await c.env.FILES_BUCKET.delete(decodeURIComponent(name));
+    return c.json({ success: true });
+});
+
+// 7. User/Admin Features
+app.put('/user/profile', async (c) => {
+    const { name, branch, phone, email } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET name=?, branch=?, phone=? WHERE email=?").bind(name, branch, phone, email).run();
+    return c.json({ success: true });
+});
+
+app.post('/user/upgrade', async (c) => {
+    const { id } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET upgrade_status='pending' WHERE id=?").bind(id).run();
+    return c.json({ success: true });
+});
+
+app.get('/admin/upgrades', async (c) => {
+    const { results } = await c.env.DB.prepare("SELECT * FROM users WHERE upgrade_status='pending'").all();
+    return c.json(results);
+});
+
+app.post('/admin/approve', async (c) => {
+    const { userId, secret } = await c.req.json();
+    if(secret !== c.env.ADMIN_SECRET_KEY) return c.json({ error: "Invalid Key" }, 403);
+    await c.env.DB.prepare("UPDATE users SET role='event_admin', upgrade_status='approved' WHERE id=?").bind(userId).run();
+    return c.json({ success: true });
+});
+
+export default app;
