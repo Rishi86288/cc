@@ -1,36 +1,21 @@
 export async function onRequest(context) {
-  // --- Configuration ---
-  // Worker's public URL (as deployed)
-  const WORKER_URL = "https://cipet-portal.rishiforrdp6055.workers.dev";
-  
-  // --- Pages Function Logic ---
+  // Service Binding name, confirmed from your screenshot.
+  // Must match the binding name in snake_case on context.env.
+  const WORKER_BINDING_NAME = 'cipet_portal'; 
 
-  // 1. Get the path suffix after the /api/ prefix.
-  // Example: If request.url is https://pages.dev/api/auth/login
-  //          context.functionPath is /api/[[catchall]]
-  //          context.params.catchall is ['auth', 'login']
-  // We want the path to be /auth/login for the Hono worker.
+  const workerService = context.env[WORKER_BINDING_NAME];
   
-  const pathname = new URL(context.request.url).pathname;
-  // Reliably strip the '/api' prefix and ensure it starts with a '/'
-  const workerPath = pathname.replace(/^\/api/, '');
-  
-  // 2. Create the URL for the Worker, using the worker's URL as the base
-  const workerUrl = new URL(workerPath, WORKER_URL);
+  if (!workerService || typeof workerService.fetch !== 'function') {
+      return new Response(`Binding Error 500: Worker binding '${WORKER_BINDING_NAME}' not found in environment.`, { status: 500 });
+  }
 
-  // 3. Clone the incoming request for the proxy, using the new Worker URL
-  const newRequest = new Request(workerUrl.toString(), {
-    method: context.request.method,
-    headers: context.request.headers,
-    body: context.request.body,
-    redirect: 'manual', // Important for proxying POST/PUT requests
-  });
-  
-  // 4. Perform the fetch to the public Worker URL
+  // Pass the original request object directly to the bound Worker's fetch method.
+  // Pages automatically strips the /api/ prefix.
   try {
-      return await fetch(newRequest);
+      return await workerService.fetch(context.request);
   } catch (e) {
-      console.error("Worker Proxy Error:", e);
-      return new Response(`Proxy Error 503: Could not reach Worker at ${WORKER_URL}.`, { status: 503 });
+      console.error(`Worker Execution Error (${WORKER_BINDING_NAME}):`, e);
+      // This indicates the Worker failed internally (e.g., D1, secret access failure).
+      return new Response(`Internal Worker Error 500: Worker execution failed. Check worker logs.`, { status: 500 });
   }
 }
