@@ -53,9 +53,9 @@ async function sendEmail(env: Bindings, toEmail: string, otpCode: string) {
 }
 
 // --- ROUTES ---
-// Note: No /api prefix here because the proxy strips it or forwards to root
+// NOTE: Using explicit POST routes to ensure Hono correctly matches the proxy paths.
 
-// 1. Login
+// 1. Login (POST /auth/login)
 app.post('/auth/login', async (c) => {
     try {
         const { email, password } = await c.req.json();
@@ -75,7 +75,7 @@ app.post('/auth/login', async (c) => {
     }
 });
 
-// 2. Verify OTP
+// 2. Verify OTP (POST /auth/verify-otp)
 app.post('/auth/verify-otp', async (c) => {
     const { email, otp } = await c.req.json();
     const stored = await c.env.OTP_KV.get(email);
@@ -87,7 +87,7 @@ app.post('/auth/verify-otp', async (c) => {
     return c.json({ error: "Invalid OTP" }, 403);
 });
 
-// 3. Google Sync
+// 3. Google Sync (POST /auth/sync)
 app.post('/auth/sync', async (c) => {
     const { uid, email, name, branch } = await c.req.json();
     let user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
@@ -99,7 +99,7 @@ app.post('/auth/sync', async (c) => {
     return c.json(user);
 });
 
-// 4. Register
+// 4. Register (POST /auth/register)
 app.post('/auth/register', async (c) => {
     const data = await c.req.json();
     
@@ -114,7 +114,7 @@ app.post('/auth/register', async (c) => {
     } catch { return c.json({ error: "Email exists" }, 400); }
 });
 
-// 5. Events
+// 5. Events (GET /events, POST /events)
 app.get('/events', async (c) => {
     const { results } = await c.env.DB.prepare("SELECT * FROM events ORDER BY created_at DESC").all();
     return c.json(results);
@@ -137,7 +137,7 @@ app.post('/events', async (c) => {
     return c.json({ success: true });
 });
 
-// 6. Files
+// 6. Files (GET /files, PUT /files, DELETE /files/:name)
 app.get('/files', async (c) => {
     const list = await c.env.FILES_BUCKET.list();
     return c.json(list.objects.map(o => ({ name: o.key, size: o.size, date: o.uploaded })));
