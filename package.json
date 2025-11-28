@@ -16,8 +16,8 @@
     "class-variance-authority": "^0.7.0",
     "@radix-ui/react-slot": "^1.0.2",
     "hono": "^4.6.1",
-    "firebase": "^10.12.3", <--- ADDED
-    "firebase-admin": "^12.3.0" <--- ADDED (for potential worker usage)
+    "firebase": "^10.12.3",
+    "firebase-admin": "^12.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",
