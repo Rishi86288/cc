@@ -10,8 +10,9 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; 
+const API_BASE_URL = "/api"; // Cloudflare Pages Proxy
 
+// --- 1. FIREBASE CONFIG (!!! MUST REPLACE THESE WITH YOUR ACTUAL KEYS !!!) ---
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE",
@@ -25,7 +26,14 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
+try {
+    if (!firebaseConfig.apiKey.includes('YOUR_FIREBASE_API_KEY')) {
+        initializeApp(firebaseConfig);
+    }
+} catch (e) {
+    console.error("Firebase initialization failed. Did you update firebaseConfig?");
+}
+
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
@@ -34,14 +42,13 @@ const fetchJson = async (url: string, options: any = {}) => {
     try {
         const res = await fetch(url, options);
         const contentType = res.headers.get("content-type");
-        
         if (contentType && contentType.indexOf("application/json") !== -1) {
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || "Server Error");
             return json;
         } else {
             const text = await res.text(); 
-            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
+            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText} (${text.substring(0, 50)}...)`);
             return {};
         }
     } catch (err: any) {
@@ -52,7 +59,7 @@ const fetchJson = async (url: string, options: any = {}) => {
 
 // --- SERVICE LAYER ---
 const api = {
-    // Auth (Now using Firebase internally in handleAuth, Worker only does D1 Sync)
+    // Auth (Worker only used for D1 synchronization)
     syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     // Events & Files
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
@@ -62,7 +69,10 @@ const api = {
         const fd = new FormData(); fd.append('file', file);
         return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
     },
-    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' })
+    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' }),
+    // Admin Actions
+    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
+    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
 };
 
 // --- COMPONENTS ---
@@ -83,7 +93,7 @@ const Header = ({ user, setView, logout }: any) => (
                             <p className="text-[10px] text-gray-500 uppercase">{user.role}</p>
                         </div>
                         <button onClick={() => setView('dashboard')} className="bg-[#003366] text-white px-3 py-1 rounded">DASHBOARD</button>
-                        <button onClick={logout} className="text-red-500"><LogOut size={18}/></button>
+                        <button onClick={logout} className="text-red-500 hover:text-red-700"><LogOut size={18}/></button>
                     </div>
                 ) : <button onClick={() => setView('login')} className="text-[#003366]">LOGIN</button>}
             </div>
@@ -91,10 +101,11 @@ const Header = ({ user, setView, logout }: any) => (
     </div>
 );
 
+// --- COMPONENT: Auth (Login/Register/OTP) ---
 const Auth = ({ mode, setView, onAuth }: any) => {
-    const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
-    const [loading, setLoading] = useState(false);
+    const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '' });
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
 
     const submit = async (e: any) => { 
         e.preventDefault(); 
@@ -109,7 +120,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
         }
     };
     
-    const handleGoogle = () => onAuth('google', { email: data.email, name: data.name });
+    const handleGoogle = () => onAuth('google', data);
 
     return (
         <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
@@ -345,9 +356,33 @@ const App = () => {
     const handleAuth = async (mode: string, data: any) => {
         try {
             let res;
-            if (mode === 'google') res = await api.googleLogin(data.email, data.name);
-            else if (mode === 'login') res = await api.login(data.email, data.password);
-            else res = await api.register(data);
+            if (mode === 'google') {
+                const result = await signInWithPopup(auth, googleProvider);
+                res = await api.syncUser({ 
+                    uid: result.user.uid, 
+                    email: result.user.email, 
+                    name: result.user.displayName,
+                    branch: data.branch || 'General' // Use default branch for first sync
+                });
+            }
+            else if (mode === 'login') {
+                await signInWithEmailAndPassword(auth, data.email, data.password);
+                // Worker only checks D1 for user role/profile
+                res = await api.syncUser({ email: data.email }); 
+            }
+            else {
+                // Register via Firebase
+                const result = await createUserWithEmailAndPassword(auth, data.email, data.password);
+                // Sync data to D1
+                res = await api.syncUser({ 
+                    uid: result.user.uid, 
+                    email: data.email, 
+                    name: data.name, 
+                    branch: data.branch, 
+                    role: data.roleType,
+                    secretCode: data.secretCode // For initial Admin role assignment in Worker
+                });
+            }
 
             if (res.status === 'OTP_REQUIRED') { 
                 const otp = prompt("Enter OTP sent to Email:"); 
@@ -361,12 +396,26 @@ const App = () => {
             } else {
                 throw new Error("Unknown Auth Error");
             }
-        } catch(e: any) { alert(e.message); }
+        } catch(e: any) { 
+            // Firebase Auth errors (auth/invalid-email, etc.)
+            let displayError = e.message;
+            if (e.code && e.code.includes('auth/')) {
+                displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
+            }
+            alert(displayError); 
+        }
+    };
+
+    const handleSignOut = () => {
+        signOut(auth).then(() => {
+            setUser(null);
+            setView('home');
+        }).catch(err => alert(err.message));
     };
 
     return (
         <div className="min-h-screen flex flex-col bg-[#f4f7f6]">
-            <Header user={user} setView={setView} logout={() => setUser(null)} />
+            <Header user={user} setView={setView} logout={handleSignOut} />
             {view === 'home' && (
                 <div className="flex-grow max-w-7xl mx-auto px-4 py-12">
                    <h1 className="text-4xl font-bold text-center mb-12 text-[#003366]">Upcoming Events</h1>
@@ -380,9 +429,9 @@ const App = () => {
                    </div>
                 </div>
             )}
-            {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} otpSent={false} />}
-            {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} otpSent={false} />}
-            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={() => setUser(null)} />}
+            {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
+            {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
+            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
     );
