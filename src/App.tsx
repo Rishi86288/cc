@@ -6,8 +6,8 @@ import {
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS (Client-side Auth) ---
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { initializeApp, FirebaseApp } from 'firebase/app';
+import { getAuth, Auth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
@@ -24,17 +24,19 @@ const firebaseConfig = {
   measurementId: "G-1RLVVBZ1YM"
 };
 // Initialize Firebase
-let auth: any = null;
-try {
-    if (!firebaseConfig.apiKey.includes('AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE')) {
-        const app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-    }
-} catch (e) {
-    console.error("Firebase initialization failed. Did you update firebaseConfig?");
-}
+let authInstance: Auth | null = null;
+let googleProvider: GoogleAuthProvider | null = null;
+const isConfigured = !firebaseConfig.apiKey.includes('AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE');
 
-const googleProvider = new GoogleAuthProvider();
+if (isConfigured) {
+    try {
+        const app = initializeApp(firebaseConfig);
+        authInstance = getAuth(app);
+        googleProvider = new GoogleAuthProvider();
+    } catch (e) {
+        console.error("FATAL: Firebase initialization failed. Check your API keys.", e);
+    }
+}
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (url: string, options: any = {}) => {
@@ -128,8 +130,11 @@ const Auth = ({ mode, setView, onAuth }: any) => {
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
                 {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
+                
+                {/* Firebase Not Configured Warning */}
+                {!isConfigured && <div className="bg-yellow-100 border border-yellow-300 text-red-800 p-2 mb-4 text-sm rounded">ERROR: Please update 'firebaseConfig' in src/App.tsx.</div>}
 
-                <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
+                <button type="button" onClick={handleGoogle} disabled={!isConfigured} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm disabled:opacity-50">
                     <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
                     {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
                 </button>
@@ -155,7 +160,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
                     <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={e => setData({...data, email: e.target.value})} required />
                     <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
                     
-                    <button disabled={loading} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg disabled:opacity-50">
+                    <button disabled={loading || !isConfigured} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg disabled:opacity-50">
                         {loading ? 'Authenticating...' : (mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN')}
                     </button>
                 </form>
