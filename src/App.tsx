@@ -1,28 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Calendar, Users, FileText, Upload, LogOut, ChevronRight, 
   Bell, MapPin, Phone, Mail, Lock, LayoutDashboard, UserCircle, 
   Menu, Settings, Folder, File, Trash2, Key, CheckCircle, CreditCard, ArrowRight, ShieldAlert, Plus, Edit3
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS ---
-// We use the modern imports here. The application assumes the global
-// Firebase compat SDKs are loaded in index.html for compatibility.
+// --- FIREBASE IMPORTS (MODULAR SDK) ---
+import { initializeApp, FirebaseApp } from 'firebase/app';
 import { 
     getAuth, 
-    signInWithPopup, 
     GoogleAuthProvider, 
+    signInWithPopup, 
     createUserWithEmailAndPassword, 
     signInWithEmailAndPassword, 
     signOut,
-    Auth, // Type import
-    UserCredential // Type import
+    Auth, 
+    UserCredential 
 } from 'firebase/auth';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
 
-// ** FIX: INCORPORATING USER'S PROVIDED FIREBASE CONFIG **
+// User's provided Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE", 
   authDomain: "savvy-fountain-372005.firebaseapp.com",
@@ -31,34 +30,14 @@ const firebaseConfig = {
   storageBucket: "savvy-fountain-372005.firebasestorage.app",
   messagingSenderId: "481989168469",
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
-  measurementId: "G-1RLVVBZ1YM" // Added user's measurementId
+  measurementId: "G-1RLVVBZ1YM" 
 };
 
-// ** FIX: Simplified check to prevent perpetual error message **
-// We now only check if the API key field is non-empty.
+// Check if configuration has been updated
 const isConfigured = !!firebaseConfig.apiKey;
 
-// Initialize Firebase services
-let authInstance: Auth | null = null;
-let googleProvider: GoogleAuthProvider | null = null;
-
-if (isConfigured) {
-    try {
-        // Initialize the app from the globally loaded SDK
-        const firebase = (window as any).firebase; // Access global compat SDK
-        if (firebase) {
-            const app = firebase.initializeApp(firebaseConfig);
-            authInstance = firebase.auth(app); // Use auth compat API
-            googleProvider = new GoogleAuthProvider();
-        } else {
-            console.error("FATAL: Firebase global SDK not found. Check index.html.");
-        }
-    } catch (e) {
-        console.error("FATAL: Firebase initialization failed. Check your API keys and index.html SDKs.", e);
-    }
-}
-
-// --- ROBUST API HELPER ---
+// --- SERVICE LAYER ---
+// (API functions remain outside, as they don't rely on React state)
 const fetchJson = async (url: string, options: any = {}) => {
     try {
         const res = await fetch(url, options);
@@ -79,11 +58,8 @@ const fetchJson = async (url: string, options: any = {}) => {
     }
 };
 
-// --- SERVICE LAYER ---
 const api = {
     syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    // Note: The /auth/login route is not used in the frontend as Firebase handles password auth
-    // We are using /auth/register and /auth/sync after Firebase auth is complete.
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
     createEvent: (fd: FormData) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
     getFiles: () => fetchJson(`${API_BASE_URL}/files`),
@@ -99,8 +75,7 @@ const api = {
     updateProfile: (data: any) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
 };
 
-// --- COMPONENTS ---
-
+// --- COMPONENTS (Omitted for brevity, logic remains the same) ---
 const Header = ({ user, setView, logout }: any) => (
     <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
@@ -154,10 +129,10 @@ const Auth = ({ mode, setView, onAuth }: any) => {
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
                 
-                {/* Configuration Error Message - REMOVED the explicit check so the app now proceeds with the user's config */}
+                {!isConfigured && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">ERROR: Firebase is not configured. Please ensure your apiKey is set in src/App.tsx.</div>}
                 {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
-                <button type="button" onClick={handleGoogle} disabled={!isConfigured} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm disabled:opacity-50">
+                <button type="button" onClick={handleGoogle} disabled={!isConfigured || loading} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm disabled:opacity-50">
                     <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
                     {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
                 </button>
@@ -197,8 +172,6 @@ const Auth = ({ mode, setView, onAuth }: any) => {
 
 const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
-    
-    // Use a custom modal instead of alert/confirm
     const [isSaving, setIsSaving] = useState(false);
     const [saveMessage, setSaveMessage] = useState('');
 
@@ -206,7 +179,6 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
         setIsSaving(true);
         setSaveMessage('');
         try {
-            // Note: The original code used api.updateProfile which is defined below
             await api.updateProfile(data);
             onUpdate(data);
             setSaveMessage('Profile Updated Successfully!');
@@ -214,7 +186,7 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
             setSaveMessage(`Error updating profile: ${e.message}`);
         } finally {
             setIsSaving(false);
-            setTimeout(() => setSaveMessage(''), 3000); // Clear message after 3 seconds
+            setTimeout(() => setSaveMessage(''), 3000); 
         }
     };
     
@@ -498,7 +470,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                     {user.role === 'super_admin' && (
                         <>
                             <button onClick={() => setActiveTab('files')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='files'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><Folder size={16}/> File Manager</button>
-                            <button onClick={() => setActiveTab('approvals')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='approvals'?'bg-red-50 text-red-600':'text-red-600 hover:bg-red-100'}`}><ShieldAlert size={16}/> Approvals</button>
+                            <button onClick={() => setActiveTab('approvals')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='approvals'?'bg-red-50 text-red-600':'text-red-600 hover:bg-gray-100'}`}><ShieldAlert size={16}/> Approvals</button>
                         </>
                     )}
                     <button onClick={logout} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-red-600 hover:bg-red-50"><LogOut size={16}/> Sign Out</button>
@@ -539,18 +511,47 @@ const App = () => {
     const [user, setUser] = useState<any>(null);
     const [events, setEvents] = useState<any[]>([]);
 
+    // --- NEW: Firebase Initialization State and Logic ---
+    const [authInitialized, setAuthInitialized] = useState(false);
+    const [firebaseServices, setFirebaseServices] = useState<{ auth: Auth | null, provider: GoogleAuthProvider | null }>({ auth: null, provider: null });
+
+    useEffect(() => {
+        if (!isConfigured) {
+            console.error("Firebase is not configured. Aborting initialization.");
+            return;
+        }
+
+        try {
+            // Modular initialization is robustly handled here inside the useEffect
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app); 
+            const provider = new GoogleAuthProvider();
+            
+            setFirebaseServices({ auth, provider });
+            setAuthInitialized(true);
+        } catch (e) {
+            console.error("FATAL: Firebase initialization failed.", e);
+            setAuthInitialized(true); // Mark as complete, even on failure
+        }
+    }, []); 
+    // --- END NEW FIREBASE LOGIC ---
+
     useEffect(() => { 
         api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error("Error fetching initial events:", e)); 
     }, []);
 
+    // Use memoized values for ease of access and dependency tracking
+    const authInstance = firebaseServices.auth;
+    const googleProvider = firebaseServices.provider;
+
     const handleAuth = async (mode: string, data: any) => {
-        // Check for configuration error explicitly here before proceeding
         if (!isConfigured) {
-             throw new Error("Configuration Error: Please update 'firebaseConfig' in src/App.tsx.");
+             throw new Error("Configuration Error: Firebase is not configured.");
         }
         
-        if (!authInstance || !googleProvider) {
-             throw new Error("Initialization Error: Firebase SDK not available.");
+        // Check for initialization success
+        if (!authInitialized || !authInstance || !googleProvider) {
+             throw new Error("Initialization Error: Firebase SDK not available. Please wait and try again.");
         }
 
         try {
@@ -568,9 +569,10 @@ const App = () => {
             }
             else if (mode === 'login') {
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
-                // For Super Admin login, the Worker handles OTP verification
-                if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
-                    res = { status: 'OTP_REQUIRED' }; // Trigger OTP check in client
+                
+                // For Super Admin login, trigger the Worker's OTP flow
+                if (data.email.toLowerCase() === 'rr8382658@gmail.com') {
+                    res = { status: 'OTP_REQUIRED' }; 
                 } else {
                     res = await api.syncUser({ email: data.email }); 
                 }
@@ -596,13 +598,10 @@ const App = () => {
                         setView('dashboard'); 
                     }
                     else {
-                        // Using window.alert instead of alert()
                         window.alert(otpRes.error || "OTP verification failed.");
-                        // Force sign out if auth succeeded but OTP failed to prevent hanging state
                         await signOut(authInstance);
                     }
                 } else {
-                    // If user cancels OTP prompt, sign out if they were signed in (for super admin case)
                      if (authInstance.currentUser) await signOut(authInstance);
                     throw new Error("OTP verification cancelled.");
                 }
@@ -618,7 +617,6 @@ const App = () => {
             if (e.code && typeof e.code === 'string' && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
             }
-            // Re-throw to be caught by Auth component
             throw new Error(displayError); 
         }
     };
@@ -628,12 +626,25 @@ const App = () => {
             signOut(authInstance).then(() => {
                 setUser(null);
                 setView('home');
-            }).catch(err => window.alert(err.message)); // Use window.alert
+            }).catch(err => window.alert(err.message)); 
         } else {
             setUser(null);
             setView('home');
         }
     };
+
+    // If authentication hasn't initialized yet, show a loading state
+    if (!authInitialized) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#f4f7f6]">
+                <div className="text-center p-8 bg-white rounded-lg shadow-xl border-t-4 border-[#003366]">
+                    <svg className="animate-spin h-8 w-8 text-[#003366] mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <p className="font-semibold text-gray-700">Loading essential services...</p>
+                    <p className="text-xs text-gray-500 mt-1">Initializing Firebase Authentication</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen flex flex-col bg-[#f4f7f6] font-sans">
