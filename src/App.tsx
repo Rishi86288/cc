@@ -112,10 +112,56 @@ const Auth = ({ setView, setUser }: any) => {
 };
 
 const Dashboard = ({ user, logout }: any) => {
-    const [activeTab, setActiveTab] = useState('overview');
-    const [otpStep, setOtpStep] = useState(false);
-    const [secret, setSecret] = useState('');
-    const [otp, setOtp] = useState('');
+    // ... existing state ...
+
+    return (
+        <div className="flex ...">
+            {/* Sidebar Logic */}
+            <div className="...">
+                 {/* Common Buttons */}
+                 <button onClick={() => setActiveTab('overview')}>Overview</button>
+                 
+                 {/* ADMIN ONLY BUTTONS */}
+                 {(user.role === 'super_admin' || user.role === 'event_admin') && (
+                     <button onClick={() => setActiveTab('events')}>Manage Events</button>
+                 )}
+                 {/* SUPER ADMIN ONLY BUTTON */}
+                 {user.role === 'super_admin' && (
+                     <button onClick={() => setActiveTab('files')}>File Manager</button>
+                 )}
+            </div>
+
+            {/* Content Logic */}
+            <div className="flex-1">
+                 {/* STUDENT VIEW */}
+                 {activeTab === 'overview' && user.role === 'student' && (
+                     <div className="bg-white p-6 rounded shadow">
+                         <h3>My Registered Events</h3>
+                         {/* Map through student registrations here */}
+                     </div>
+                 )}
+
+                 {/* ADMIN VIEW */}
+                 {activeTab === 'overview' && user.role !== 'student' && (
+                     <div className="grid grid-cols-3 gap-4">
+                         <div className="card">Total Students: 500+</div>
+                         <div className="card">Total Revenue: ₹50,000</div>
+                     </div>
+                 )}
+
+                 {/* UPLOAD EVENT FORM (Admin Only) */}
+                 {activeTab === 'events' && (
+                     <form onSubmit={handleCreate}>
+                         {/* Inputs for Title, Date, Fee */}
+                         {/* FILE UPLOAD INPUT */}
+                         <input type="file" name="attachment" />
+                         <button>Post Notice/Event</button>
+                     </form>
+                 )}
+            </div>
+        </div>
+    );
+}
 
     const handleUpgrade = async () => {
         if (otpStep) {
