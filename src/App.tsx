@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "https://vite-react-template.rishiforrdp6055.workers.dev/api"; // Uses Cloudflare Pages Functions proxy
+const API_BASE_URL = "/api"; // Uses Cloudflare Pages Functions proxy
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (url: string, options: any = {}) => {
@@ -236,7 +236,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                 <div className="p-6 bg-[#003366] text-center text-white mb-2">
                     <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name[0]}</div>
                     <h3 className="font-bold truncate">{user.name}</h3>
-                    <p className="text-xs uppercase opacity-75">{user.role.replace('_',' ')}</p>
+                    <p className="text-xs uppercase opacity-75">{user.role}</p>
                 </div>
                 <nav className="px-2 space-y-1">
                     <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='overview'?'bg-blue-50 text-[#003366]':'text-gray-600'}`}><LayoutDashboard size={16}/> Overview</button>
@@ -291,7 +291,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                                     </div>
                                     <textarea name="desc" className="w-full border p-2 rounded" placeholder="Description..."></textarea>
                                     <div className="flex gap-4 items-center"><label className="flex gap-2 text-sm"><input type="checkbox" name="isPaid" /> Paid?</label><input type="file" name="attachment" className="text-xs"/></div>
-                                    <button className="bg-[#003366] text-white px-4 py-2 rounded font-bold">Publish</button>
+                                    <button className="bg-[#003366] text-white px-4 py-2 rounded font-bold">Publish Event</button>
                                 </form>
                             </div>
                         )}
