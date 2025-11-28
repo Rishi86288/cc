@@ -1,21 +1,5 @@
 {
   "version": 1,
-  "include": ["/*"],
-  "exclude": ["/assets/*"]
+  "include": ["/api/*"],
+  "exclude": []
 }
-```
-*If you cannot create `_routes.json`, creating a file named `_redirects` in the `public` folder with the content `/* /index.html 200` also works.*
-
-#### **Step 3: Verify `index.html` Import**
-Ensure your `index.html` is pointing to the correct entry file. It looks correct in your upload (`/src/main.tsx`), but double-check that `src/main.tsx` actually exists and has no typos.
-
-#### **Step 4: Check for Console Errors**
-1.  Open your live site (`...pages.dev`).
-2.  Right-click -> **Inspect**.
-3.  Go to the **Console** tab.
-4.  **If you see errors like `exports is not defined` or `process is not defined`:**
-    * This means a node-only package is being used in the browser. You might need to add this to `vite.config.ts` inside `define`:
-        ```typescript
-        define: {
-          'process.env': {}
-        }
