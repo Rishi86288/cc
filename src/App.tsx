@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; 
+const API_BASE_URL = "/api"; // Cloudflare Pages Proxy
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (url: string, options: any = {}) => {
@@ -19,7 +19,7 @@ const fetchJson = async (url: string, options: any = {}) => {
             return json;
         } else {
             const text = await res.text(); 
-            if (!res.ok) throw new Error(text || `Request failed: ${res.status}`);
+            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
             return {};
         }
     } catch (err: any) {
@@ -28,16 +28,23 @@ const fetchJson = async (url: string, options: any = {}) => {
     }
 };
 
-// --- SERVICE LAYER ---
+// --- SERVICE LAYER (Fixed Paths) ---
 const api = {
+    // Auth
     login: (email, password) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
-    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({uid: crypto.randomUUID(), email, name, branch: 'General'}) }),
+    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/google`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, name}) }),
     verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
     register: (data) => fetchJson(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    
+    // User Features
     updateProfile: (data) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     requestUpgrade: (id) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
+    
+    // Admin Features
     getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
     approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    
+    // Events & Files
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
     createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
     getFiles: () => fetchJson(`${API_BASE_URL}/files`),
@@ -77,23 +84,28 @@ const Header = ({ user, setView, logout }: any) => (
 const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const submit = async (e: any) => { 
         e.preventDefault(); 
         setLoading(true);
-        await onAuth(mode, data);
+        setError('');
+        try {
+            await onAuth(mode, data);
+        } catch(err: any) {
+            setError(err.message);
+        }
         setLoading(false);
     };
     
-    const handleGoogle = () => {
-        const mockUser = { email: 'googleuser@gmail.com', name: 'Google User' };
-        onAuth('google', mockUser);
-    };
+    const handleGoogle = () => onAuth('google', { email: 'googleuser@gmail.com', name: 'Google User' });
 
     return (
         <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify Identity' : (mode==='signup'?'Register':'Portal Login')}</h2>
+                
+                {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4 text-sm">{error}</div>}
 
                 {!otpSent && (
                     <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
@@ -123,7 +135,7 @@ const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
                             <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
                         </>
                     )}
-                    <button disabled={loading} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg">
+                    <button disabled={loading} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg disabled:opacity-50">
                         {loading ? 'Processing...' : (otpSent ? 'VERIFY OTP' : 'SUBMIT')}
                     </button>
                 </form>
