@@ -60,6 +60,7 @@ const fetchJson = async (url: string, options: any = {}) => {
 
 const api = {
     syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    loginUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
     createEvent: (fd: FormData) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
     getFiles: () => fetchJson(`${API_BASE_URL}/files`),
@@ -564,13 +565,16 @@ const App = () => {
         return 'home';
     };
 
-    // --- NEW: Effect to handle redirection on initial load or user change ---
+    // --- EFFECT: Handle redirection on initial load or user change ---
     useEffect(() => {
         if (user && view !== getRoleBasedView(user.role)) {
             setView(getRoleBasedView(user.role));
         }
-    }, [user]); 
-    // --- END NEW EFFECT ---
+    }, [user, view]); 
+    // I noticed the dependency array was only [user] before. Adding 'view'
+    // in the dependency list prevents an infinite loop and ensures the check
+    // only runs if the user changes OR the view is stuck somewhere it shouldn't be.
+    // However, the previous logic should have been sufficient IF setUser was synchronous.
 
     const handleAuth = async (mode: string, data: any) => {
         if (!isConfigured) {
@@ -596,14 +600,15 @@ const App = () => {
                 });
             }
             else if (mode === 'login') {
+                // 1. Authenticate with Firebase first (required to keep session state)
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
-                
-                // For Super Admin login, trigger the Worker's OTP flow
-                if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
-                    res = { status: 'OTP_REQUIRED' }; 
-                } else {
-                    res = await api.syncUser({ email: data.email }); 
-                }
+
+                // 2. Then, call the Worker's custom login/sync endpoint
+                // We use the new api.loginUser for email/password validation and role fetching
+                res = await api.loginUser({ email: data.email, password: data.password });
+
+                // If Worker authentication fails, it throws an error handled by the outer catch block.
+                // If it succeeds, it returns { status: 'SUCCESS', user } or { status: 'OTP_REQUIRED' }
             }
             else { // signup
                 authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
@@ -623,7 +628,7 @@ const App = () => {
                     const otpRes = await api.verifyOtp(data.email, otp);
                     if(otpRes.status === 'SUCCESS' && otpRes.user) { 
                         setUser(otpRes.user); 
-                        // The new useEffect will handle the redirect based on the role
+                        // The effect hook handles redirection
                     }
                     else {
                         window.alert(otpRes.error || "OTP verification failed.");
@@ -633,14 +638,24 @@ const App = () => {
                      if (authInstance.currentUser) await signOut(authInstance);
                     throw new Error("OTP verification cancelled.");
                 }
-            } else if (res.user) { 
+            } else if (res.user && res.status === 'SUCCESS') { 
                 setUser(res.user); 
-                // The new useEffect will handle the redirect based on the role
+                // The effect hook handles redirection
             } else {
-                throw new Error("Unknown authentication flow error.");
+                // This might catch cases where Firebase auth worked but D1 sync failed silently
+                // or if the worker API returns an unexpected structure.
+                if (authInstance.currentUser) await signOut(authInstance);
+                throw new Error("Portal login synchronization failed. Check Worker logs.");
             }
         } catch(e: any) { 
             console.error("Auth Error:", e);
+            
+            // Crucial cleanup: if Firebase auth succeeded but the D1/Worker sync failed,
+            // we must sign out of Firebase to prevent being stuck in a bad state.
+            if (authInstance.currentUser) {
+                 await signOut(authInstance).catch(err => console.error("Error signing out after sync failure:", err));
+            }
+            
             let displayError = e.message;
             if (e.code && typeof e.code === 'string' && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
