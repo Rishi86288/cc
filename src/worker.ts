@@ -67,7 +67,54 @@ app.post('/api/auth/sync', async (c) => {
   }
 });
 
+// 1. SECURE LOGIN & OTP ROUTE
+if (path === "/auth/login" && method === "POST") {
+    const { email, password } = await request.json() as any;
+    
+    // Check against HIDDEN Environment Variable (Not hardcoded)
+    if (email === env.SUPER_ADMIN_EMAIL) { 
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        // Store OTP in KV for 5 minutes
+        await env.OTP_KV.put(email, otp, { expirationTtl: 300 });
+        
+        // Send Real Email via EmailJS
+        await sendEmailJS(env, email, otp);
+        
+        return new Response(JSON.stringify({ status: 'OTP_REQUIRED' }), { headers });
+    }
+
+    // Normal Student Login
+    const user = await env.DB.prepare("SELECT * FROM users WHERE email = ? AND password = ?").bind(email, password).first();
+    if(!user) return new Response(JSON.stringify({ error: "Invalid Credentials" }), { status: 401, headers });
+    
+    return new Response(JSON.stringify({ status: 'SUCCESS', user }), { headers });
+}
+
+// 2. VERIFY OTP ROUTE
+if (path === "/auth/verify-otp" && method === "POST") {
+    const { email, otp } = await request.json() as any;
+    const stored = await env.OTP_KV.get(email);
+    
+    if (stored === otp) {
+        await env.OTP_KV.delete(email); // One-time use
+        // Return Super Admin Session
+        return new Response(JSON.stringify({ 
+            status: 'SUCCESS', 
+            user: { id: 1, name: "Super Admin", email, role: "super_admin", branch: "ADMIN" } 
+        }), { headers });
+    }
+    return new Response(JSON.stringify({ error: "Invalid OTP" }), { status: 403, headers });
+}
+
+
+
+
+
+
 // --- 2. SECURE ADMIN OTP ---
+
+
+
 
 app.post('/api/admin/request-otp', async (c) => {
   const { uid, key } = await c.req.json();
@@ -100,6 +147,78 @@ app.post('/api/admin/verify-otp', async (c) => {
   await c.env.DB.prepare("UPDATE users SET role = 'event_admin' WHERE id = ?").bind(uid).run();
   return c.json({ success: true });
 });
+
+// POST: Create Event/Notice with File
+if (path === "/events" && method === "POST") {
+    const formData = await request.formData();
+    const file = formData.get('attachment') as File | null;
+    let attachmentUrl = null;
+
+    // Upload File to R2 Storage
+    if(file && typeof file === 'object') {
+        const fileName = `${Date.now()}-${file.name}`;
+        await env.FILES_BUCKET.put(fileName, file.stream());
+        attachmentUrl = fileName;
+    }
+
+    // Save Data to D1 Database
+    await env.DB.prepare(`
+        INSERT INTO events (title, date, branch, fee, is_paid, description, attachment_url, created_by_email)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+        formData.get('title'), 
+        formData.get('date'), 
+        formData.get('branch'), 
+        formData.get('fee'), 
+        formData.get('isPaid') === 'true' ? 1 : 0, 
+        formData.get('desc'), 
+        attachmentUrl, 
+        formData.get('userEmail')
+    ).run();
+    
+    return new Response(JSON.stringify({ success: true }), { headers });
+}
+
+
+// GOOGLE FAST LOGIN
+if (path === "/auth/google" && method === "POST") {
+    const { email, name } = await request.json() as any;
+    
+    // Check if user exists
+    let user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    
+    if (!user) {
+        // Auto-Sign Up if new
+        await env.DB.prepare(
+            "INSERT INTO users (name, email, role, branch, auth_provider) VALUES (?, ?, 'student', 'General', 'google')"
+        ).bind(name, email).run();
+        user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    }
+    return new Response(JSON.stringify({ status: 'SUCCESS', user }), { headers });
+}
+
+// MANUAL SIGN UP FORM
+if (path === "/auth/register" && method === "POST") {
+    const data: any = await request.json();
+    
+    // Verify Admin Secret (Hidden)
+    if (data.roleType === 'super_admin' && data.secretCode !== env.ADMIN_SECRET_KEY) {
+        return new Response(JSON.stringify({ error: "Invalid Admin Secret" }), { status: 403, headers });
+    }
+
+    try {
+        await env.DB.prepare(
+            "INSERT INTO users (name, email, password, role, branch, phone) VALUES (?, ?, ?, ?, ?, ?)"
+        ).bind(data.name, data.email, data.password, data.roleType, data.branch, data.phone).run();
+        
+        return new Response(JSON.stringify({ success: true }), { headers });
+    } catch(e) {
+        return new Response(JSON.stringify({ error: "User already exists" }), { status: 400, headers });
+    }
+}
+
+
+
 
 // --- 3. EVENTS ---
 
