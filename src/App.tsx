@@ -564,6 +564,14 @@ const App = () => {
         return 'home';
     };
 
+    // --- NEW: Effect to handle redirection on initial load or user change ---
+    useEffect(() => {
+        if (user && view !== getRoleBasedView(user.role)) {
+            setView(getRoleBasedView(user.role));
+        }
+    }, [user]); 
+    // --- END NEW EFFECT ---
+
     const handleAuth = async (mode: string, data: any) => {
         if (!isConfigured) {
              throw new Error("Configuration Error: Firebase is not configured.");
@@ -615,8 +623,7 @@ const App = () => {
                     const otpRes = await api.verifyOtp(data.email, otp);
                     if(otpRes.status === 'SUCCESS' && otpRes.user) { 
                         setUser(otpRes.user); 
-                        // REDIRECT BASED ON ROLE AFTER OTP SUCCESS
-                        setView(getRoleBasedView(otpRes.user.role)); 
+                        // The new useEffect will handle the redirect based on the role
                     }
                     else {
                         window.alert(otpRes.error || "OTP verification failed.");
@@ -628,8 +635,7 @@ const App = () => {
                 }
             } else if (res.user) { 
                 setUser(res.user); 
-                // REDIRECT BASED ON ROLE AFTER NORMAL SIGN IN/SIGN UP SUCCESS
-                setView(getRoleBasedView(res.user.role)); 
+                // The new useEffect will handle the redirect based on the role
             } else {
                 throw new Error("Unknown authentication flow error.");
             }
