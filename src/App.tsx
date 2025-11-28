@@ -11,7 +11,7 @@ import {
 const IS_PROD = window.location.hostname.includes('pages.dev');
 const API_BASE_URL = IS_PROD 
   ? "/api" 
-  : "https://cipet-portal.rishiforrdp6055.workers.dev/api"; // Fallback to direct worker
+  : "https://vite-react-template.rishiforrdp6055.workers.dev/api"; // Fallback to direct worker
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (endpoint: string, options: any = {}) => {
