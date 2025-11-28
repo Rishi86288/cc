@@ -109,7 +109,10 @@ const fetchJson = async (url: string, options: any = {}) => {
 
 const api = {
     // Only Worker functions remain that cannot be done client-side or in Firestore
+    // This API call is still needed for Super Admin OTP verification
     verifyOtp: (data: any) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    // This API call is needed to trigger the OTP email send in the Worker
+    triggerOtp: (data: any) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
 };
 
 // --- COMPONENTS ---
@@ -726,24 +729,46 @@ const App = () => {
             else if (mode === 'login') {
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
                 
-                // --- SUPER ADMIN LOGIN DEBUG MODE ---
+                // --- SUPER ADMIN LOGIN SECURE FLOW RESTORATION ---
                 if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
-                    // **DEBUG MODE: Bypassing Worker/OTP failure due to missing secrets**
-                    window.alert("DEBUG MODE: Super Admin access granted, bypassing OTP verification due to configuration error.");
                     
-                    const userRef = doc(db, "users", authResult.user.uid);
-                    await setDoc(userRef, {
-                        uid: authResult.user.uid,
-                        email: authResult.user.email,
-                        name: "Super Admin",
-                        role: "super_admin", 
-                        branch: "ADMIN",
-                        upgrade_status: 'approved'
-                    }, { merge: true });
+                    // 1. Trigger OTP email send in the Worker
+                    const triggerRes = await api.triggerOtp({ email: data.email }); 
+                    
+                    if(triggerRes.status !== 'OTP_REQUIRED') {
+                         await signOut(authInstance);
+                         throw new Error("Failed to trigger OTP process in Worker.");
+                    }
+                    
+                    // 2. Prompt for OTP
+                    const otp = window.prompt("Enter OTP sent to your email:"); 
+                    
+                    if(otp) {
+                         // 3. Verify OTP using Worker API
+                         const otpRes = await api.verifyOtp({ email: data.email, otp });
+                         
+                         if(otpRes.status !== 'SUCCESS') { 
+                            await signOut(authInstance);
+                            throw new Error(otpRes.error || "OTP verification failed.");
+                         }
+                         
+                         // 4. OTP successful, set/merge super admin role in Firestore
+                         const userRef = doc(db, "users", authResult.user.uid);
+                         await setDoc(userRef, {
+                            uid: authResult.user.uid,
+                            email: authResult.user.email,
+                            name: "Super Admin",
+                            role: "super_admin", 
+                            branch: "ADMIN",
+                            upgrade_status: 'approved'
+                         }, { merge: true });
 
-                    userProfile = { uid: authResult.user.uid, email: authResult.user.email, name: "Super Admin", role: "super_admin", branch: "ADMIN" };
-                    
-                    // --- END DEBUG MODE ---
+                         userProfile = { uid: authResult.user.uid, email: authResult.user.email, name: "Super Admin", role: "super_admin", branch: "ADMIN" };
+                         
+                    } else {
+                        await signOut(authInstance);
+                        throw new Error("OTP verification cancelled.");
+                    }
                 } else {
                     // Normal user login: fetch profile from Firestore
                     const userRef = doc(db, "users", authResult.user.uid);
