@@ -571,7 +571,7 @@ const App = () => {
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
                 
                 // For Super Admin login, trigger the Worker's OTP flow
-                if (data.email.toLowerCase() === 'rr8382658@gmail.com') {
+                if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
                     res = { status: 'OTP_REQUIRED' }; 
                 } else {
                     res = await api.syncUser({ email: data.email }); 
@@ -595,7 +595,7 @@ const App = () => {
                     const otpRes = await api.verifyOtp(data.email, otp);
                     if(otpRes.status === 'SUCCESS' && otpRes.user) { 
                         setUser(otpRes.user); 
-                        setView('dashboard'); 
+                        setView('dashboard'); // <-- REDIRECT AFTER OTP SUCCESS
                     }
                     else {
                         window.alert(otpRes.error || "OTP verification failed.");
@@ -607,7 +607,7 @@ const App = () => {
                 }
             } else if (res.user) { 
                 setUser(res.user); 
-                setView('dashboard'); 
+                setView('dashboard'); // <-- REDIRECT AFTER NORMAL SIGN IN/SIGN UP SUCCESS
             } else {
                 throw new Error("Unknown authentication flow error.");
             }
