@@ -5,9 +5,8 @@ import {
   Menu, Settings, Folder, File, Trash2, Key, CheckCircle, CreditCard, ArrowRight, ShieldAlert, Plus, Edit3
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS (Client-side Auth) ---
-import { initializeApp, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+// --- FIREBASE IMPORTS (We only import TYPES here, the code uses global window.firebase) ---
+import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
@@ -20,19 +19,18 @@ const firebaseConfig = {
   projectId: "savvy-fountain-372005",
   storageBucket: "savvy-fountain-372005.firebasestorage.app",
   messagingSenderId: "481989168469",
-  appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
-  measurementId: "G-1RLVVBZ1YM"
+  appId: "1:481989168469:web:1811072ec0ee37fecc33dc"
 };
-
 // Initialize Firebase
-let authInstance: Auth | null = null;
+let auth: any = null;
 let googleProvider: GoogleAuthProvider | null = null;
 const isConfigured = !firebaseConfig.apiKey.includes('AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE');
 
 if (isConfigured) {
     try {
-        const app = initializeApp(firebaseConfig);
-        authInstance = getAuth(app);
+        // Initialize the app from the globally loaded SDK
+        const app = (window as any).firebase.initializeApp(firebaseConfig);
+        auth = (window as any).firebase.auth(app); // Use auth compat API
         googleProvider = new GoogleAuthProvider();
     } catch (e) {
         console.error("FATAL: Firebase initialization failed. Check your API keys.", e);
