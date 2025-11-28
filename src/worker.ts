@@ -15,7 +15,7 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Enable CORS for all routes
+// Enable CORS for all routes 
 app.use('/*', cors({
   origin: '*', // In production, change this to your pages.dev URL
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
