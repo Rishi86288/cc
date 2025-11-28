@@ -23,6 +23,7 @@ const firebaseConfig = {
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM"
 };
+
 // Initialize Firebase
 let authInstance: Auth | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
@@ -129,10 +130,10 @@ const Auth = ({ mode, setView, onAuth }: any) => {
         <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
-                {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
                 
-                {/* Firebase Not Configured Warning */}
-                {!isConfigured && <div className="bg-yellow-100 border border-yellow-300 text-red-800 p-2 mb-4 text-sm rounded">ERROR: Please update 'firebaseConfig' in src/App.tsx.</div>}
+                {/* Configuration Error Message */}
+                {!isConfigured && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">ERROR: Please update 'firebaseConfig' in src/App.tsx.</div>}
+                {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
                 <button type="button" onClick={handleGoogle} disabled={!isConfigured} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm disabled:opacity-50">
                     <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
@@ -359,10 +360,15 @@ const App = () => {
     }, []);
 
     const handleAuth = async (mode: string, data: any) => {
+        if (!isConfigured) {
+             alert("Configuration Error: Please update Firebase API keys in src/App.tsx.");
+             return;
+        }
+
         try {
             let res;
             if (mode === 'google') {
-                const result = await signInWithPopup(auth, googleProvider);
+                const result = await signInWithPopup(authInstance!, googleProvider!);
                 res = await api.syncUser({ 
                     uid: result.user.uid, 
                     email: result.user.email, 
@@ -371,13 +377,13 @@ const App = () => {
                 });
             }
             else if (mode === 'login') {
-                await signInWithEmailAndPassword(auth, data.email, data.password);
+                await signInWithEmailAndPassword(authInstance!, data.email, data.password);
                 res = await api.syncUser({ email: data.email }); 
             }
             else {
-                await createUserWithEmailAndPassword(auth, data.email, data.password);
+                await createUserWithEmailAndPassword(authInstance!, data.email, data.password);
                 res = await api.syncUser({ 
-                    uid: auth.currentUser.uid, 
+                    uid: authInstance!.currentUser!.uid, 
                     email: data.email, 
                     name: data.name, 
                     branch: data.branch, 
@@ -403,15 +409,20 @@ const App = () => {
             if (e.code && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
             }
-            alert(displayError); 
+            throw new Error(displayError); // Re-throw to be caught by Auth component
         }
     };
 
     const handleSignOut = () => {
-        signOut(auth).then(() => {
+        if (authInstance) {
+            signOut(authInstance).then(() => {
+                setUser(null);
+                setView('home');
+            }).catch(err => alert(err.message));
+        } else {
             setUser(null);
             setView('home');
-        }).catch(err => alert(err.message));
+        }
     };
 
     return (
