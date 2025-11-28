@@ -6,76 +6,60 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const USE_MOCK_API = false; // Set to FALSE for production
 const API_BASE_URL = "/api"; // Uses Cloudflare Pages Functions proxy
 
-// --- SERVICE LAYER ---
-const api = {
-    // --- AUTHENTICATION ---
-    login: async (email, password) => {
-        const res = await fetch(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) });
-        return res.json();
-    },
-    googleLogin: async (email, name) => {
-        // This maps to the Google Sync endpoint in your worker
-        const res = await fetch(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({uid: crypto.randomUUID(), email, name}) });
-        return res.json();
-    },
-    verifyOtp: async (email, otp) => {
-        const res = await fetch(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) });
-        return res.json();
-    },
-    register: async (data) => {
-        const res = await fetch(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-        return res.json();
-    },
-
-    // --- PROFILE & UPGRADES ---
-    updateProfile: async (data) => {
-        const res = await fetch(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-        return res.json();
-    },
-    requestUpgrade: async (id) => {
-        const res = await fetch(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) });
-        return res.json();
-    },
-    getUpgrades: async () => {
-        const res = await fetch(`${API_BASE_URL}/admin/upgrades`);
-        return res.json();
-    },
-    approveUpgrade: async (userId, secret) => {
-        const res = await fetch(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) });
-        return res.json();
-    },
-
-    // --- EVENTS ---
-    getEvents: async () => {
-        const res = await fetch(`${API_BASE_URL}/events`);
-        return res.json();
-    },
-    createEvent: async (fd) => {
-        const res = await fetch(`${API_BASE_URL}/events`, { method: 'POST', body: fd });
-        return res.json();
-    },
-
-    // --- FILES ---
-    getFiles: async () => {
-        const res = await fetch(`${API_BASE_URL}/files`);
-        return res.json();
-    },
-    uploadFile: async (file) => {
-        const fd = new FormData(); fd.append('file', file);
-        const res = await fetch(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
-        return res.json();
-    },
-    deleteFile: async (name) => {
-        const res = await fetch(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' });
-        return res.json();
+// --- ROBUST API HELPER ---
+const fetchJson = async (url: string, options: any = {}) => {
+    try {
+        const res = await fetch(url, options);
+        const contentType = res.headers.get("content-type");
+        
+        // Check for JSON response
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || "Server Error");
+            return json;
+        } else {
+            // Handle non-JSON (likely text error or empty)
+            const text = await res.text(); 
+            if (!res.ok) throw new Error(text || `Request failed: ${res.status}`);
+            // If success but no JSON (e.g. 204 No Content), return empty object
+            return {};
+        }
+    } catch (err: any) {
+        console.error("API Error:", err);
+        throw err;
     }
 };
 
-// --- COMPONENTS ---
+// --- SERVICE LAYER ---
+const api = {
+    // Auth
+    login: (email, password) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
+    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/google`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, name}) }),
+    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
+    register: (data) => fetchJson(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    
+    // User Features
+    updateProfile: (data) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    requestUpgrade: (id) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
+    
+    // Admin Features
+    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
+    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    
+    // Events & Files
+    getEvents: () => fetchJson(`${API_BASE_URL}/events`),
+    createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
+    getFiles: () => fetchJson(`${API_BASE_URL}/files`),
+    uploadFile: (file) => {
+        const fd = new FormData(); fd.append('file', file);
+        return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
+    },
+    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' })
+};
 
+// --- COMPONENT: Header ---
 const Header = ({ user, setView, logout }: any) => (
     <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
@@ -100,21 +84,79 @@ const Header = ({ user, setView, logout }: any) => (
     </div>
 );
 
+// --- COMPONENT: Auth (Login/Register/OTP) ---
+const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
+    const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
+    const [error, setError] = useState('');
+
+    const submit = (e: any) => { 
+        e.preventDefault(); 
+        setError('');
+        onAuth(mode, data).catch((err: any) => setError(err.message));
+    };
+    
+    const handleGoogle = () => onAuth('google', { email: 'googleuser@gmail.com', name: 'Google User' });
+
+    return (
+        <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
+            <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
+                <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify Identity' : (mode==='signup'?'Register':'Portal Login')}</h2>
+                {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
+
+                {!otpSent && (
+                    <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
+                        <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
+                        {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
+                    </button>
+                )}
+
+                <form onSubmit={submit} className="space-y-4">
+                    {otpSent ? (
+                        <input className="w-full border p-2 rounded text-center text-2xl tracking-widest" onChange={e => setData({...data, otp: e.target.value})} placeholder="OTP" required />
+                    ) : (
+                        <>
+                            {mode === 'signup' && (
+                                <>
+                                    <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={e => setData({...data, name: e.target.value})} required />
+                                    <div className="flex gap-2">
+                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
+                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
+                                    </div>
+                                    {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
+                                        <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
+                                    )}
+                                </>
+                            )}
+                            <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={e => setData({...data, email: e.target.value})} required />
+                            <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
+                        </>
+                    )}
+                    <button className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg">
+                        {otpSent ? 'VERIFY OTP' : 'SUBMIT'}
+                    </button>
+                </form>
+                {!otpSent && <div className="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline" onClick={() => setView(mode==='login'?'signup':'login')}>{mode==='login'?'Create Account':'Back to Login'}</div>}
+            </div>
+        </div>
+    );
+};
+
+// --- COMPONENT: Profile Editor ---
 const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
-    
     const handleSave = async () => {
-        await api.updateProfile(data);
-        onUpdate(data);
-        alert('Profile Updated!');
+        try {
+            await api.updateProfile(data);
+            onUpdate(data);
+            alert('Profile Updated!');
+        } catch(e: any) { alert(e.message); }
     };
-
     return (
         <div className="bg-white p-6 rounded shadow border">
             <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><UserCircle/> Edit Profile</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div><label className="text-xs font-bold text-gray-500">Name</label><input className="w-full border p-2 rounded" value={data.name} onChange={e => setData({...data, name: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500">Phone</label><input className="w-full border p-2 rounded" value={data.phone || ''} onChange={e => setData({...data, phone: e.target.value})} placeholder="+91..." /></div>
+                <div><label className="text-xs font-bold text-gray-500">Phone</label><input className="w-full border p-2 rounded" value={data.phone || ''} onChange={e => setData({...data, phone: e.target.value})} /></div>
                 <div><label className="text-xs font-bold text-gray-500">Branch</label><select className="w-full border p-2 rounded" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select></div>
             </div>
             <button onClick={handleSave} className="bg-[#003366] text-white px-4 py-2 rounded text-sm font-bold">Save Changes</button>
@@ -122,6 +164,7 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
     );
 };
 
+// --- COMPONENT: Admin Approvals ---
 const AdminApprovals = () => {
     const [reqs, setReqs] = useState<any[]>([]);
     const [secret, setSecret] = useState('');
@@ -129,9 +172,11 @@ const AdminApprovals = () => {
     useEffect(() => { api.getUpgrades().then(data => { if(Array.isArray(data)) setReqs(data); }); }, []);
 
     const handleApprove = async (id: number) => {
-        const res = await api.approveUpgrade(id, secret);
-        if(res.success) { alert("User Upgraded!"); api.getUpgrades().then(setReqs); }
-        else alert(res.error);
+        try {
+            await api.approveUpgrade(id, secret);
+            alert("User Upgraded!"); 
+            api.getUpgrades().then(setReqs);
+        } catch(e: any) { alert(e.message); }
     };
 
     return (
@@ -156,6 +201,7 @@ const AdminApprovals = () => {
     );
 };
 
+// --- COMPONENT: Dashboard ---
 const Dashboard = ({ user, setUser, logout }: any) => {
     const [activeTab, setActiveTab] = useState('overview');
     const [files, setFiles] = useState([]);
@@ -177,22 +223,33 @@ const Dashboard = ({ user, setUser, logout }: any) => {
         if(e.target.files[0]) { await api.uploadFile(e.target.files[0]); api.getFiles().then(setFiles); }
     };
 
+    const handleUpgrade = async () => {
+         try {
+            await api.requestUpgrade(user.id);
+            alert("Upgrade Request Sent!");
+         } catch (e: any) { alert(e.message); }
+    };
+
     return (
         <div className="max-w-7xl mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 min-h-[60vh]">
             <div className="w-full md:w-64 bg-white rounded shadow h-fit pb-4 border border-gray-200">
                 <div className="p-6 bg-[#003366] text-center text-white mb-2">
                     <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name[0]}</div>
                     <h3 className="font-bold truncate">{user.name}</h3>
-                    <p className="text-xs uppercase opacity-75">{user.role.replace('_',' ')}</p>
+                    <p className="text-xs uppercase opacity-75">{user.role}</p>
                 </div>
                 <nav className="px-2 space-y-1">
-                    <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='overview'?'bg-blue-50 text-[#003366]':'text-gray-600'}`}><LayoutDashboard size={16}/> Overview</button>
-                    <button onClick={() => setActiveTab('profile')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='profile'?'bg-blue-50 text-[#003366]':'text-gray-600'}`}><UserCircle size={16}/> Profile</button>
-                    {(user.role === 'super_admin' || user.role === 'event_admin') && <button onClick={() => setActiveTab('events')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-gray-600"><Calendar size={16}/> Manage Events</button>}
+                    <button onClick={() => setActiveTab('overview')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><LayoutDashboard size={16}/> Overview</button>
+                    <button onClick={() => setActiveTab('profile')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><UserCircle size={16}/> Profile</button>
+                    
+                    {(user.role === 'super_admin' || user.role === 'event_admin') && (
+                        <button onClick={() => setActiveTab('events')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Calendar size={16}/> Manage Events</button>
+                    )}
+                    
                     {user.role === 'super_admin' && (
                         <>
-                            <button onClick={() => setActiveTab('files')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-gray-600"><Folder size={16}/> Files</button>
-                            <button onClick={() => setActiveTab('approvals')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-red-600"><ShieldAlert size={16}/> Approvals</button>
+                            <button onClick={() => setActiveTab('files')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Folder size={16}/> File Manager</button>
+                            <button onClick={() => setActiveTab('approvals')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100 text-red-600"><ShieldAlert size={16}/> Approvals</button>
                         </>
                     )}
                     <button onClick={logout} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-red-600 hover:bg-red-50"><LogOut size={16}/> Sign Out</button>
@@ -200,19 +257,19 @@ const Dashboard = ({ user, setUser, logout }: any) => {
             </div>
 
             <div className="flex-1">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab === 'profile' ? 'Edit Profile' : 'Dashboard'}</h2>
-
+                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Dashboard</h2>
+                
                 {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} />}
                 
                 {activeTab === 'overview' && (
                     <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="bg-white p-6 rounded shadow border-l-4 border-[#003366]"><p className="text-xs font-bold text-gray-500 uppercase">Status</p><p className="text-2xl font-bold text-[#003366]">Active</p></div>
                         </div>
                         {user.role === 'student' && (
                             <div className="bg-white p-6 rounded shadow border border-blue-100 flex justify-between items-center">
                                 <div><h3 className="font-bold text-[#003366]">Become Event Admin</h3><p className="text-sm text-gray-600">Organize workshops and manage registrations.</p></div>
-                                {user.upgrade_status === 'pending' ? <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm font-bold">Pending</span> : <button onClick={() => api.requestUpgrade(user.id).then(() => { alert("Request Sent!"); setUser({...user, upgrade_status: 'pending'}); })} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow">Request Upgrade</button>}
+                                <button onClick={handleUpgrade} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow hover:bg-yellow-400">Request Upgrade</button>
                             </div>
                         )}
                     </div>
@@ -232,7 +289,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                                         <input name="date" type="date" className="w-full border p-2 rounded" required />
                                         <input name="fee" type="number" className="w-full border p-2 rounded" placeholder="Fee (₹)" />
                                     </div>
-                                    <textarea name="desc" className="w-full border p-2 rounded" placeholder="Details..."></textarea>
+                                    <textarea name="desc" className="w-full border p-2 rounded" placeholder="Description..."></textarea>
                                     <div className="flex gap-4 items-center"><label className="flex gap-2 text-sm"><input type="checkbox" name="isPaid" /> Paid?</label><input type="file" name="attachment" className="text-xs"/></div>
                                     <button className="bg-[#003366] text-white px-4 py-2 rounded font-bold">Publish</button>
                                 </form>
@@ -257,66 +314,35 @@ const Dashboard = ({ user, setUser, logout }: any) => {
     );
 };
 
-const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
-    const [data, setData] = useState({ email: '', password: '', role: 'student', branch: 'STC' });
-    const submit = (e: any) => { e.preventDefault(); onAuth(mode, data); };
-    const handleGoogle = () => onAuth('google', { email: 'googleuser@gmail.com', name: 'Google User' });
-
-    return (
-        <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
-            <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
-                <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify OTP' : (mode==='signup'?'Register':'Login')}</h2>
-                {!otpSent && <button type="button" onClick={handleGoogle} className="w-full bg-white border border-gray-300 py-2 rounded mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm flex justify-center gap-2"><span className="text-red-500 font-bold">G</span> {mode==='signup'?'Sign up with Google':'Sign in with Google'}</button>}
-                <form onSubmit={submit} className="space-y-4">
-                    {otpSent ? (
-                        <input className="w-full border p-2 rounded text-center text-2xl tracking-widest" onChange={(e: any) => setData({...data, otp: e.target.value})} placeholder="OTP" />
-                    ) : (
-                        <>
-                            {mode === 'signup' && (
-                                <>
-                                    <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={(e: any) => setData({...data, name: e.target.value})} required />
-                                    <div className="flex gap-2">
-                                        <select className="w-full border p-2 rounded bg-white" onChange={(e: any) => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option></select>
-                                        <select className="w-full border p-2 rounded bg-white" onChange={(e: any) => setData({...data, role: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option></select>
-                                    </div>
-                                    {(data.role === 'event_admin' || data.role === 'super_admin') && <input type="password" placeholder="Admin Secret" className="w-full border border-red-300 p-2 rounded" onChange={(e: any) => setData({...data, secretCode: e.target.value})} />}
-                                </>
-                            )}
-                            <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={(e: any) => setData({...data, email: e.target.value})} required />
-                            <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={(e: any) => setData({...data, password: e.target.value})} required />
-                        </>
-                    )}
-                    <button className="w-full bg-[#003366] text-white py-2 rounded font-bold">{otpSent ? 'Verify' : 'Submit'}</button>
-                </form>
-                {!otpSent && <div className="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline" onClick={() => setView(mode==='login'?'signup':'login')}>{mode==='login'?'Create Account':'Back to Login'}</div>}
-            </div>
-        </div>
-    );
-};
-
+// --- MAIN APP ---
 const App = () => {
     const [view, setView] = useState('home');
     const [user, setUser] = useState<any>(null);
     const [events, setEvents] = useState<any[]>([]);
 
     useEffect(() => { 
-        api.getEvents().then(data => {
-            if (Array.isArray(data)) setEvents(data);
-        }).catch(() => setEvents([]));
+        api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error(e)); 
     }, []);
 
     const handleAuth = async (mode: string, data: any) => {
         try {
             let res;
             if (mode === 'google') res = await api.googleLogin(data.email, data.name);
-            else if (mode === 'login') {
-                if (otpSent) res = await api.verifyOtp(data.email, data.otp);
-                else res = await api.login(data.email, data.password);
-            } else res = await api.register(data);
+            else if (mode === 'login') res = await api.login(data.email, data.password);
+            else res = await api.register(data);
 
-            if (res.status === 'OTP_REQUIRED') { setOtpSent(true); alert("OTP sent to Super Admin email."); }
-            else if (res.user) { setUser(res.user); setView('dashboard'); setOtpSent(false); }
-            else alert(res.error || "Failed");
+            if (res.status === 'OTP_REQUIRED') { 
+                const otp = prompt("Enter OTP sent to Email:"); 
+                if(otp) {
+                    const otpRes = await api.verifyOtp(data.email, otp);
+                    if(otpRes.status === 'SUCCESS') { setUser(otpRes.user); setView('dashboard'); }
+                    else alert(otpRes.error);
+                }
+            } else if (res.user) { 
+                setUser(res.user); setView('dashboard'); 
+            } else {
+                throw new Error("Unknown Auth Error");
+            }
         } catch(e: any) { alert(e.message); }
     };
 
@@ -336,7 +362,8 @@ const App = () => {
                    </div>
                 </div>
             )}
-            {view === 'login' && <Auth mode={view} setView={setView} onAuth={handleAuth} otpSent={otpSent} />}
+            {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
+            {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
             {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={() => setUser(null)} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
