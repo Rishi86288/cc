@@ -9,7 +9,12 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "lucide-react": "^0.263.1"
+    "lucide-react": "^0.263.1",
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^2.2.1",
+    "tailwindcss-animate": "^1.0.7",
+    "class-variance-authority": "^0.7.0",
+    "@radix-ui/react-slot": "^1.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",
@@ -18,6 +23,17 @@
     "postcss": "^8.4.35",
     "autoprefixer": "^10.4.17",
     "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0"
+    "@types/react-dom": "^18.2.0",
+    "@cloudflare/workers-types": "^4.20240208.0"
   }
 }
+```
+
+### **3. Fix Backend File Extension**
+Your backend file `src/worker.js` contains TypeScript code (interfaces, types), but it has a `.js` extension. This prevents it from compiling correctly.
+
+* **Rename File:** Rename `src/worker.js` to `src/worker.ts`.
+* **Open:** `wrangler.toml`
+* **Update the `main` line:**
+    ```toml
+    main = "src/worker.ts"
