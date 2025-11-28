@@ -35,7 +35,10 @@ import {
 import { getStorage, ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; // Proxy to Worker (Used only for R2/file management in Worker)
+// Removed API_BASE_URL and the api service layer completely.
+// NOTE ON SECURITY: Since the Worker is removed, the Super Admin secret check
+// is performed client-side (insecure). This should be replaced with a Cloud 
+// Function/backend API for production security.
 
 // User's provided Firebase configuration
 const firebaseConfig = {
@@ -84,35 +87,6 @@ const createOrUpdateUserInFirestore = async (db: Firestore, userAuth: any, userD
         await setDoc(userRef, initialData);
         return initialData;
     }
-};
-
-// --- API Service Layer (Worker) - Only for R2/EmailJS functionality ---
-const fetchJson = async (url: string, options: any = {}) => {
-    try {
-        const res = await fetch(url, options);
-        const contentType = res.headers.get("content-type");
-        
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-            const json = await res.json();
-            if (!res.ok) throw new Error(json.error || "Server Error");
-            return json;
-        } else {
-            const text = await res.text(); 
-            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
-            return {};
-        }
-    } catch (err: any) {
-        console.error("API Error:", err);
-        throw err;
-    }
-};
-
-const api = {
-    // Only Worker functions remain that cannot be done client-side or in Firestore
-    // This API call is still needed for Super Admin OTP verification
-    verifyOtp: (data: any) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    // This API call is needed to trigger the OTP email send in the Worker
-    triggerOtp: (data: any) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
 };
 
 // --- COMPONENTS ---
@@ -202,6 +176,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
                                 <select className="w-full border p-2 rounded bg-white" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
                                 <select className="w-full border p-2 rounded bg-white" value={data.roleType} onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
                             </div>
+                            {/* Security Note: In a real app, this secret code validation MUST be done on the server (Cloud Function). */}
                             {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
                                 <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
                             )}
@@ -560,7 +535,7 @@ const Dashboard = ({ user, setUser, logout, db, storage }: any) => {
                 const userRef = doc(db, "users", user.uid);
                 await updateDoc(userRef, { upgrade_status: 'pending' });
                 setUser({...user, upgrade_status: 'pending'});
-                window.alert("Upgrade Request Sent! An admin will review it soon.");
+                window.alert("Request sent! An admin will review it soon.");
              } catch (e: any) { 
                 window.alert(`Error sending upgrade request: ${e.message}`); 
              }
@@ -729,46 +704,30 @@ const App = () => {
             else if (mode === 'login') {
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
                 
-                // --- SUPER ADMIN LOGIN SECURE FLOW RESTORATION ---
+                // --- SUPER ADMIN LOGIN CLIENT-SIDE SECRET CHECK ---
                 if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
                     
-                    // 1. Trigger OTP email send in the Worker
-                    const triggerRes = await api.triggerOtp({ email: data.email }); 
+                    // NOTE: This check is INSECURE and is necessary because the Worker/EmailJS dependency was removed.
+                    const superAdminSecret = window.prompt("Enter the Master Secret Key for Super Admin access:"); 
                     
-                    if(triggerRes.status !== 'OTP_REQUIRED') {
+                    if(superAdminSecret !== 'MASTER_SECRET_KEY_PLACEHOLDER') { // Replace with a hardcoded or runtime secret
                          await signOut(authInstance);
-                         throw new Error("Failed to trigger OTP process in Worker.");
+                         throw new Error("INCORRECT MASTER SECRET KEY.");
                     }
                     
-                    // 2. Prompt for OTP
-                    const otp = window.prompt("Enter OTP sent to your email:"); 
-                    
-                    if(otp) {
-                         // 3. Verify OTP using Worker API
-                         const otpRes = await api.verifyOtp({ email: data.email, otp });
-                         
-                         if(otpRes.status !== 'SUCCESS') { 
-                            await signOut(authInstance);
-                            throw new Error(otpRes.error || "OTP verification failed.");
-                         }
-                         
-                         // 4. OTP successful, set/merge super admin role in Firestore
-                         const userRef = doc(db, "users", authResult.user.uid);
-                         await setDoc(userRef, {
-                            uid: authResult.user.uid,
-                            email: authResult.user.email,
-                            name: "Super Admin",
-                            role: "super_admin", 
-                            branch: "ADMIN",
-                            upgrade_status: 'approved'
-                         }, { merge: true });
+                    // Secret successful, set/merge super admin role in Firestore
+                    const userRef = doc(db, "users", authResult.user.uid);
+                    await setDoc(userRef, {
+                        uid: authResult.user.uid,
+                        email: authResult.user.email,
+                        name: "Super Admin",
+                        role: "super_admin", 
+                        branch: "ADMIN",
+                        upgrade_status: 'approved'
+                    }, { merge: true });
 
-                         userProfile = { uid: authResult.user.uid, email: authResult.user.email, name: "Super Admin", role: "super_admin", branch: "ADMIN" };
+                    userProfile = { uid: authResult.user.uid, email: authResult.user.email, name: "Super Admin", role: "super_admin", branch: "ADMIN" };
                          
-                    } else {
-                        await signOut(authInstance);
-                        throw new Error("OTP verification cancelled.");
-                    }
                 } else {
                     // Normal user login: fetch profile from Firestore
                     const userRef = doc(db, "users", authResult.user.uid);
@@ -777,11 +736,17 @@ const App = () => {
                         userProfile = { uid: authResult.user.uid, email: authResult.user.email, ...docSnap.data() };
                     } else {
                         await signOut(authInstance);
-                        throw new Error("User profile missing in database.");
+                        throw new Error("User profile missing in database. Please sign up.");
                     }
                 }
             }
             else { // signup
+                // Check if user signing up for admin role knows the general admin secret code.
+                const targetRole = data.roleType;
+                if ((targetRole === 'event_admin' || targetRole === 'super_admin') && data.secretCode !== 'ADMIN_SIGNUP_SECRET') {
+                    throw new Error("Invalid Admin Signup Secret Code.");
+                }
+                
                 authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
                 userProfile = await createOrUpdateUserInFirestore(db, authResult.user, data);
             }
