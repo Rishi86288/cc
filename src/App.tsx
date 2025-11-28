@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; // Uses Cloudflare Pages Functions proxy
+const API_BASE_URL = "https://vite-react-template.rishiforrdp6055.workers.dev/api"; // Uses Cloudflare Pages Functions proxy
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (url: string, options: any = {}) => {
