@@ -17,9 +17,25 @@ import {
     Auth, 
     UserCredential 
 } from 'firebase/auth';
+import { 
+    getFirestore, 
+    doc, 
+    setDoc, 
+    getDoc, 
+    collection, 
+    query, 
+    onSnapshot, 
+    updateDoc, 
+    arrayUnion, 
+    deleteDoc,
+    QueryDocumentSnapshot,
+    serverTimestamp,
+    Firestore
+} from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage';
 
 // --- CONFIGURATION ---
-const API_BASE_URL = "/api"; // Proxy to Worker
+const API_BASE_URL = "/api"; // Proxy to Worker (Used only for R2/file management in Worker)
 
 // User's provided Firebase configuration
 const firebaseConfig = {
@@ -27,17 +43,50 @@ const firebaseConfig = {
   authDomain: "savvy-fountain-372005.firebaseapp.com",
   databaseURL: "https://savvy-fountain-372005-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "savvy-fountain-372005",
-  storageBucket: "savvy-fountain-372005.firebasestorage.app",
+  storageBucket: "savvy-fountain-372005.firebasestorage.app", // Used for Firebase Storage
   messagingSenderId: "481989168469",
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM" 
 };
 
-// Check if configuration has been updated
 const isConfigured = !!firebaseConfig.apiKey;
 
-// --- SERVICE LAYER ---
-// (API functions remain outside, as they don't rely on React state)
+// --- FIRESTORE/STORAGE FUNCTIONS ---
+
+const createOrUpdateUserInFirestore = async (db: Firestore, userAuth: any, userData: any = {}) => {
+    const userRef = doc(db, "users", userAuth.uid);
+    const docSnap = await getDoc(userRef);
+    
+    const baseUserData = {
+        uid: userAuth.uid,
+        email: userAuth.email,
+        name: userAuth.displayName || userData.name || 'User',
+        branch: userData.branch || 'General',
+    };
+
+    if (docSnap.exists()) {
+        const existingData = docSnap.data();
+        // Update name/branch if coming from a signup/sync attempt
+        await updateDoc(userRef, {
+            name: baseUserData.name,
+            branch: baseUserData.branch
+        });
+        return { ...existingData, ...baseUserData };
+    } else {
+        // New user signup
+        const initialRole = userData.role || 'student';
+        const initialData = {
+            ...baseUserData,
+            role: initialRole, // Role set at signup
+            upgrade_status: 'none',
+            createdAt: serverTimestamp(),
+        };
+        await setDoc(userRef, initialData);
+        return initialData;
+    }
+};
+
+// --- API Service Layer (Worker) - Only for R2/EmailJS functionality ---
 const fetchJson = async (url: string, options: any = {}) => {
     try {
         const res = await fetch(url, options);
@@ -59,32 +108,23 @@ const fetchJson = async (url: string, options: any = {}) => {
 };
 
 const api = {
-    syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    loginUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    getEvents: () => fetchJson(`${API_BASE_URL}/events`),
-    createEvent: (fd: FormData) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
-    getFiles: () => fetchJson(`${API_BASE_URL}/files`),
-    uploadFile: (file: File) => {
-        const fd = new FormData(); fd.append('file', file);
-        return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
-    },
-    deleteFile: (name: string) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' }),
-    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
-    approveUpgrade: (userId: string, secret: string) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    // Only Worker functions remain that cannot be done client-side or in Firestore
     verifyOtp: (email: string, otp: string) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
-    requestUpgrade: (id: string) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
-    updateProfile: (data: any) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    
+    // File Management remains on the Worker (R2), client uses Firebase Storage.
+    // We remove the D1 related API calls since they are replaced by Firestore.
 };
 
-// --- COMPONENTS (Omitted for brevity, logic remains the same) ---
+// --- COMPONENTS ---
+// Note: Components are updated to use Firestore logic passed via props.
+
 const Header = ({ user, setView, logout }: any) => {
     
-    // Function to determine the correct dashboard view name based on role
     const getDashboardViewName = (role: string) => {
         if (role === 'student') return 'student_dashboard';
         if (role === 'event_admin') return 'admin_dashboard';
         if (role === 'super_admin') return 'super_admin_dashboard';
-        return 'home'; // Fallback
+        return 'home';
     };
     
     return (
@@ -102,7 +142,6 @@ const Header = ({ user, setView, logout }: any) => {
                                 <p className="text-[#003366]">{user.name}</p>
                                 <p className="text-[10px] text-gray-500 uppercase">{user.role}</p>
                             </div>
-                            {/* Use the role-specific view name here */}
                             <button onClick={() => setView(getDashboardViewName(user.role))} className="bg-[#003366] text-white px-3 py-1 rounded">DASHBOARD</button>
                             <button onClick={logout} className="text-red-500 hover:text-red-700"><LogOut size={18}/></button>
                         </div>
@@ -183,7 +222,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
     );
 };
 
-const ProfileEditor = ({ user, onUpdate }: any) => {
+const ProfileEditor = ({ user, onUpdate, db }: any) => {
     const [data, setData] = useState({ ...user });
     const [isSaving, setIsSaving] = useState(false);
     const [saveMessage, setSaveMessage] = useState('');
@@ -192,7 +231,12 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
         setIsSaving(true);
         setSaveMessage('');
         try {
-            await api.updateProfile(data);
+            const userRef = doc(db, "users", user.uid);
+            await updateDoc(userRef, {
+                name: data.name,
+                phone: data.phone || '',
+                branch: data.branch
+            });
             onUpdate(data);
             setSaveMessage('Profile Updated Successfully!');
         } catch(e: any) { 
@@ -224,34 +268,45 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
     );
 };
 
-const AdminApprovals = () => {
+const AdminApprovals = ({ db }: any) => {
     const [reqs, setReqs] = useState<any[]>([]);
     const [secret, setSecret] = useState('');
     const [message, setMessage] = useState('');
 
-    const fetchUpgrades = () => {
-        api.getUpgrades()
-            .then(data => { 
-                if(Array.isArray(data)) setReqs(data); 
-                setMessage('');
-            })
-            .catch(e => setMessage(`Error fetching requests: ${e.message}`));
-    };
+    useEffect(() => {
+        if (!db) return;
+        const q = query(collection(db, "users")); 
+        
+        // This watches all users and filters client-side, replace with proper query in production
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const pendingReqs = snapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(u => u.upgrade_status === 'pending');
+            setReqs(pendingReqs);
+        }, (error) => {
+            setMessage(`Error loading approvals: ${error.message}`);
+        });
 
-    useEffect(() => { fetchUpgrades(); }, []);
+        return () => unsubscribe();
+    }, [db]);
 
-    const handleApprove = async (id: string) => {
+    const handleApprove = async (userUid: string) => {
         setMessage('');
-        if (!secret) {
-            setMessage("Please enter the Admin Secret Key first.");
+        // NOTE: In a real app, this approval logic must run on a secure server/worker/cloud function.
+        if (secret !== 'SUPER_ADMIN_SECRET') { // Using a placeholder key
+            setMessage("Invalid Secret. Approval failed.");
             return;
         }
+
         try {
-            await api.approveUpgrade(id, secret);
-            setMessage("User Upgraded Successfully!"); 
-            fetchUpgrades();
+            const userRef = doc(db, "users", userUid);
+            await updateDoc(userRef, {
+                role: 'event_admin',
+                upgrade_status: 'approved'
+            });
+            setMessage(`User ${userUid} Upgraded Successfully!`); 
         } catch(e: any) { 
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error approving user: ${e.message}`);
         }
     };
 
@@ -261,14 +316,14 @@ const AdminApprovals = () => {
                 <h3 className="font-bold text-lg flex items-center gap-2"><ShieldAlert className="text-red-500"/> Pending Upgrade Requests</h3>
                 <input 
                     type="password" 
-                    placeholder="Admin Secret Key" 
+                    placeholder="Admin Secret Key (Placeholder)" 
                     className="border p-2 rounded text-xs w-full sm:w-48 bg-red-50" 
                     onChange={e => setSecret(e.target.value)} 
                     value={secret}
                 />
             </div>
             {message && (
-                <div className={`mb-4 p-2 text-sm rounded ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                <div className={`mb-4 p-2 text-sm rounded ${message.includes('Error') || message.includes('Invalid Secret') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                     {message}
                 </div>
             )}
@@ -280,7 +335,7 @@ const AdminApprovals = () => {
                             <td className="p-2">{u.name}</td>
                             <td className="p-2">{u.email}</td>
                             <td className="p-2">{u.branch}</td>
-                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold disabled:opacity-50" disabled={!secret}>Approve</button></td>
+                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold disabled:opacity-50" disabled={secret !== 'SUPER_ADMIN_SECRET'}>Approve</button></td>
                         </tr>
                     ))}
                     {reqs.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-gray-400">No pending requests.</td></tr>}
@@ -290,18 +345,24 @@ const AdminApprovals = () => {
     );
 };
 
-const EventManager = ({ user }: any) => {
+const EventManager = ({ user, db, storage }: any) => {
     const [showCreate, setShowCreate] = useState(false);
     const [message, setMessage] = useState('');
     const [events, setEvents] = useState<any[]>([]);
 
-    const fetchEvents = () => {
-        api.getEvents()
-            .then(data => { if(Array.isArray(data)) setEvents(data); })
-            .catch(e => setMessage(`Error fetching events: ${e.message}`));
-    };
+    // Real-time listener for events
+    useEffect(() => { 
+        if (!db) return;
+        const q = query(collection(db, "events"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setEvents(fetchedEvents);
+        }, (error) => {
+            setMessage(`Error loading events: ${error.message}`);
+        });
 
-    useEffect(() => { fetchEvents(); }, []);
+        return () => unsubscribe();
+    }, [db]);
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -309,16 +370,33 @@ const EventManager = ({ user }: any) => {
         const form = e.target as HTMLFormElement;
         const fd = new FormData(form);
         
-        // Ensure checkbox value is correctly set
-        const isPaidInput = form.querySelector('input[name="isPaid"]') as HTMLInputElement;
-        fd.append('isPaid', isPaidInput.checked ? 'true' : 'false');
-        fd.append('userEmail', user.email);
-        
+        const file = fd.get('attachment') as File | null;
+        let attachmentUrl = null;
+
         try {
-            await api.createEvent(fd);
+            if (file && file.size > 0) {
+                const storageRef = ref(storage, `attachments/${Date.now()}-${file.name}`);
+                const snapshot = await uploadBytes(storageRef, file);
+                attachmentUrl = await getDownloadURL(snapshot.ref);
+            }
+            
+            const isPaidInput = form.querySelector('input[name="isPaid"]') as HTMLInputElement;
+
+            // Add document to Firestore
+            await setDoc(doc(collection(db, "events")), {
+                title: fd.get('title'),
+                date: fd.get('date'),
+                branch: fd.get('branch'),
+                fee: parseFloat(fd.get('fee') as string || '0'),
+                is_paid: isPaidInput.checked,
+                description: fd.get('desc'),
+                attachment_url: attachmentUrl,
+                created_by_email: user.email,
+                createdAt: serverTimestamp(),
+            });
+
             setMessage("Event Posted Successfully!");
             setShowCreate(false);
-            fetchEvents();
             form.reset();
         } catch(e: any) {
             setMessage(`Error posting event: ${e.message}`);
@@ -361,7 +439,7 @@ const EventManager = ({ user }: any) => {
                         <h4 className="font-bold text-[#003366]">{ev.title}</h4>
                         <p className="text-xs text-gray-500 mb-2">{new Date(ev.date).toLocaleDateString()} | Fee: ₹{ev.fee || '0'} {ev.is_paid ? '(Paid)' : '(Free)'}</p>
                         <p className="text-sm line-clamp-2">{ev.description}</p>
-                        {ev.attachment_url && <a href={`/api/files/${ev.attachment_url}`} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"><File size={14} /> Attachment</a>}
+                        {ev.attachment_url && <a href={ev.attachment_url} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"><File size={14} /> Attachment</a>}
                     </div>
                 ))}
             </div>
@@ -369,48 +447,83 @@ const EventManager = ({ user }: any) => {
     );
 };
 
-const FileManager = ({ files, setFiles }: { files: any[], setFiles: React.Dispatch<React.SetStateAction<any[]>> }) => {
+// FileManager and Dashboard components are now updated to use Firestore/Storage props
+const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
+    const [files, setFiles] = useState<any[]>([]);
     const [message, setMessage] = useState('');
-    
-    const fetchFiles = () => {
-        api.getFiles()
-            .then(data => { if(Array.isArray(data)) setFiles(data); })
-            .catch(e => setMessage(`Error fetching files: ${e.message}`));
-    };
+    const [uploading, setUploading] = useState(false);
+
+    // Real-time listener for file metadata stored in Firestore
+    useEffect(() => { 
+        if (!db) return;
+        const q = query(collection(db, "file_metadata"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedFiles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setFiles(fetchedFiles);
+        }, (error) => {
+            setMessage(`Error loading files: ${error.message}`);
+        });
+
+        return () => unsubscribe();
+    }, [db]);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         setMessage('');
-        if(e.target.files && e.target.files[0]) { 
+        const file = e.target.files?.[0];
+
+        if (file) { 
+            setUploading(true);
             try {
-                await api.uploadFile(e.target.files[0]); 
-                setMessage(`File ${e.target.files[0].name} uploaded successfully!`);
-                fetchFiles();
+                // 1. Upload file to Firebase Storage
+                const storageRef = ref(storage, `user_files/${file.name}`);
+                const snapshot = await uploadBytes(storageRef, file);
+                const downloadURL = await getDownloadURL(snapshot.ref);
+
+                // 2. Store metadata in Firestore
+                await setDoc(doc(collection(db, "file_metadata")), {
+                    name: file.name,
+                    size: file.size,
+                    storagePath: snapshot.metadata.fullPath,
+                    url: downloadURL,
+                    uploadedAt: serverTimestamp(),
+                });
+
+                setMessage(`File ${file.name} uploaded successfully!`);
             } catch(e: any) {
                 setMessage(`Error uploading file: ${e.message}`);
+            } finally {
+                setUploading(false);
             }
         }
     };
 
-    const handleDeleteFile = async (name: string) => {
-        // Using custom logic instead of confirm()
-        if (window.prompt(`To confirm deletion of "${name}", type DELETE below:`) === 'DELETE') {
+    const handleDeleteFile = async (file: any) => {
+        if (window.prompt(`To confirm deletion of "${file.name}", type DELETE below:`) === 'DELETE') {
             try {
-                await api.deleteFile(name);
-                setMessage(`File ${name} deleted successfully!`);
-                fetchFiles();
+                // 1. Delete file from Firebase Storage
+                const storageRef = ref(storage, file.storagePath);
+                await deleteObject(storageRef);
+
+                // 2. Delete metadata from Firestore
+                await deleteDoc(doc(db, "file_metadata", file.id));
+                
+                setMessage(`File ${file.name} deleted successfully!`);
             } catch(e: any) {
                 setMessage(`Error deleting file: ${e.message}`);
             }
         } else {
-             setMessage(`Deletion of ${name} cancelled.`);
+             setMessage(`Deletion of ${file.name} cancelled.`);
         }
     };
 
     return (
         <div className="bg-white rounded shadow overflow-hidden border border-gray-200">
             <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-                <h3 className="font-bold flex items-center gap-2"><Folder size={18} /> Cloud Files (R2)</h3>
-                <label className="bg-[#003366] text-white px-3 py-1 rounded text-sm cursor-pointer flex gap-1 items-center hover:bg-blue-900 transition"><Upload size={14}/> Upload <input type="file" className="hidden" onChange={handleUpload}/></label>
+                <h3 className="font-bold flex items-center gap-2"><Folder size={18} /> Cloud Files (Firebase Storage)</h3>
+                <label className="bg-[#003366] text-white px-3 py-1 rounded text-sm cursor-pointer flex gap-1 items-center hover:bg-blue-900 transition disabled:opacity-50" style={{ pointerEvents: uploading ? 'none' : 'auto' }}>
+                    {uploading ? 'Uploading...' : <><Upload size={14}/> Upload</>}
+                    <input type="file" className="hidden" onChange={handleUpload} disabled={uploading} />
+                </label>
             </div>
             {message && (
                 <div className={`p-3 text-sm ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
@@ -419,14 +532,14 @@ const FileManager = ({ files, setFiles }: { files: any[], setFiles: React.Dispat
             )}
             <div className="divide-y divide-gray-100">
                 {files.map((f:any) => (
-                    <div key={f.name} className="p-3 text-sm flex justify-between items-center hover:bg-gray-50">
+                    <div key={f.id} className="p-3 text-sm flex justify-between items-center hover:bg-gray-50">
                         <span className="flex gap-2 items-center">
                             <FileText size={16} className="text-[#003366]"/> 
-                            <a href={`/api/files/${f.name}`} target="_blank" className="text-blue-600 hover:underline">{f.name}</a>
+                            <a href={f.url} target="_blank" className="text-blue-600 hover:underline">{f.name}</a>
                         </span>
                         <div className="flex items-center gap-4">
                             <span className="text-gray-500 text-xs">{Math.round(f.size / 1024)} KB</span>
-                            <button onClick={() => handleDeleteFile(f.name)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100"><Trash2 size={16}/></button>
+                            <button onClick={() => handleDeleteFile(f)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100"><Trash2 size={16}/></button>
                         </div>
                     </div>
                 ))}
@@ -436,24 +549,17 @@ const FileManager = ({ files, setFiles }: { files: any[], setFiles: React.Dispat
     );
 };
 
-const Dashboard = ({ user, setUser, logout }: any) => {
+
+const Dashboard = ({ user, setUser, logout, db, storage }: any) => {
     const [activeTab, setActiveTab] = useState('overview');
-    const [files, setFiles] = useState([]);
-    
-    // Fetch files only when the tab is active
-    useEffect(() => { 
-        if(activeTab === 'files') {
-            api.getFiles().then(data => { if(Array.isArray(data)) setFiles(data); }); 
-        } 
-    }, [activeTab]);
 
     const handleUpgrade = async () => {
-         // Using custom prompt instead of alert/confirm
          const confirmation = window.prompt("Type 'CONFIRM' to request an upgrade to Event Admin role:");
          if(confirmation === 'CONFIRM') {
              try {
-                await api.requestUpgrade(user.id);
-                setUser({...user, upgrade_status: 'pending'}); // Optimistically update local state
+                const userRef = doc(db, "users", user.uid);
+                await updateDoc(userRef, { upgrade_status: 'pending' });
+                setUser({...user, upgrade_status: 'pending'});
                 window.alert("Upgrade Request Sent! An admin will review it soon.");
              } catch (e: any) { 
                 window.alert(`Error sending upgrade request: ${e.message}`); 
@@ -470,7 +576,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                     <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name?.[0] || 'U'}</div>
                     <h3 className="font-bold truncate">{user.name}</h3>
                     <p className="text-xs uppercase opacity-75">{user.role}</p>
-                    <p className="text-[10px] opacity-60 mt-1">ID: {user.id}</p>
+                    <p className="text-[10px] opacity-60 mt-1">UID: {user.uid}</p>
                 </div>
                 <nav className="px-2 space-y-1">
                     <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='overview'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><LayoutDashboard size={16}/> Overview</button>
@@ -493,7 +599,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
             <div className="flex-1">
                 <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
 
-                {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} />}
+                {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} db={db} />}
                 
                 {activeTab === 'overview' && (
                     <div className="space-y-6">
@@ -511,9 +617,9 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                     </div>
                 )}
 
-                {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals />}
-                {activeTab === 'events' && (user.role === 'super_admin' || user.role === 'event_admin') && <EventManager user={user} />}
-                {activeTab === 'files' && user.role === 'super_admin' && <FileManager files={files} setFiles={setFiles} />}
+                {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals db={db} />}
+                {activeTab === 'events' && (user.role === 'super_admin' || user.role === 'event_admin') && <EventManager user={user} db={db} storage={storage} />}
+                {activeTab === 'files' && user.role === 'super_admin' && <FileManager db={db} storage={storage} />}
             </div>
         </div>
     );
@@ -524,10 +630,11 @@ const App = () => {
     const [user, setUser] = useState<any>(null);
     const [events, setEvents] = useState<any[]>([]);
 
-    // --- NEW: Firebase Initialization State and Logic ---
+    // --- FIREBASE SERVICE STATES ---
     const [authInitialized, setAuthInitialized] = useState(false);
-    const [firebaseServices, setFirebaseServices] = useState<{ auth: Auth | null, provider: GoogleAuthProvider | null }>({ auth: null, provider: null });
+    const [firebaseServices, setFirebaseServices] = useState<{ auth: Auth | null, provider: GoogleAuthProvider | null, db: Firestore | null, storage: any }>({ auth: null, provider: null, db: null, storage: null });
 
+    // --- INITIALIZATION ---
     useEffect(() => {
         if (!isConfigured) {
             console.error("Firebase is not configured. Aborting initialization.");
@@ -535,28 +642,37 @@ const App = () => {
         }
 
         try {
-            // Modular initialization is robustly handled here inside the useEffect
             const app = initializeApp(firebaseConfig);
             const auth = getAuth(app); 
+            const db = getFirestore(app);
+            const storage = getStorage(app);
             const provider = new GoogleAuthProvider();
             
-            setFirebaseServices({ auth, provider });
+            setFirebaseServices({ auth, provider, db, storage });
             setAuthInitialized(true);
         } catch (e) {
             console.error("FATAL: Firebase initialization failed.", e);
-            setAuthInitialized(true); // Mark as complete, even on failure
+            setAuthInitialized(true);
         }
     }, []); 
-    // --- END NEW FIREBASE LOGIC ---
 
+    // --- EVENT LISTENER (for home page) ---
+    const { db } = firebaseServices;
     useEffect(() => { 
-        api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error("Error fetching initial events:", e)); 
-    }, []);
+        if (!db) return;
+        const q = query(collection(db, "events"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setEvents(fetchedEvents.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)));
+        }, (error) => {
+            console.error("Error loading events for home page:", error.message);
+        });
+        return () => unsubscribe();
+    }, [db]);
 
     // Use memoized values for ease of access and dependency tracking
-    const authInstance = firebaseServices.auth;
-    const googleProvider = firebaseServices.provider;
-    
+    const { auth: authInstance, provider: googleProvider, storage } = firebaseServices;
+
     // Helper to determine the correct view based on the user's role
     const getRoleBasedView = (role: string) => {
         if (role === 'student') return 'student_dashboard';
@@ -565,97 +681,94 @@ const App = () => {
         return 'home';
     };
 
-    // --- EFFECT: Handle redirection on initial load or user change ---
+    // --- AUTH STATE PERSISTENCE & REDIRECTION ---
     useEffect(() => {
-        if (user && view !== getRoleBasedView(user.role)) {
-            setView(getRoleBasedView(user.role));
-        }
-    }, [user, view]); 
-    // I noticed the dependency array was only [user] before. Adding 'view'
-    // in the dependency list prevents an infinite loop and ensures the check
-    // only runs if the user changes OR the view is stuck somewhere it shouldn't be.
-    // However, the previous logic should have been sufficient IF setUser was synchronous.
+        if (!authInitialized || !authInstance || !db) return;
+
+        // 1. Listen for Firebase Auth State Changes
+        const unsubscribeAuth = authInstance.onAuthStateChanged(async (userAuth) => {
+            if (userAuth) {
+                // 2. Fetch user data (roles, etc.) from Firestore
+                const userRef = doc(db, "users", userAuth.uid);
+                const docSnap = await getDoc(userRef);
+
+                if (docSnap.exists()) {
+                    const userData = { uid: userAuth.uid, email: userAuth.email, ...docSnap.data() };
+                    setUser(userData);
+                    setView(getRoleBasedView(userData.role));
+                } else {
+                    // New Auth user detected but no Firestore profile (e.g., first-time sign in/refresh)
+                    // We let the handleAuth function set the initial user data.
+                    // If this happens on refresh, we set minimal data to avoid being stuck.
+                    setUser({ uid: userAuth.uid, email: userAuth.email, role: 'student', name: userAuth.displayName || 'User' });
+                    setView(getRoleBasedView('student'));
+                }
+            } else {
+                setUser(null);
+                if (view !== 'home' && view !== 'login' && view !== 'signup') {
+                    setView('home');
+                }
+            }
+        });
+        return () => unsubscribeAuth();
+    }, [authInitialized, authInstance, db]);
+    // --- END AUTH STATE PERSISTENCE & REDIRECTION ---
 
     const handleAuth = async (mode: string, data: any) => {
-        if (!isConfigured) {
-             throw new Error("Configuration Error: Firebase is not configured.");
-        }
-        
-        // Check for initialization success
-        if (!authInitialized || !authInstance || !googleProvider) {
+        if (!authInitialized || !authInstance || !googleProvider || !db) {
              throw new Error("Initialization Error: Firebase SDK not available. Please wait and try again.");
         }
 
         try {
-            let authResult: UserCredential | null = null;
-            let res;
-            
+            let authResult: UserCredential;
+            let userProfile;
+
             if (mode === 'google') {
                 authResult = await signInWithPopup(authInstance, googleProvider);
-                res = await api.syncUser({ 
-                    uid: authResult.user.uid, 
-                    email: authResult.user.email, 
-                    name: authResult.user.displayName,
-                    branch: data.branch || 'General' 
-                });
+                userProfile = await createOrUpdateUserInFirestore(db, authResult.user, data);
             }
             else if (mode === 'login') {
-                // 1. Authenticate with Firebase first (required to keep session state)
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
-
-                // 2. Then, call the Worker's custom login/sync endpoint
-                // We use the new api.loginUser for email/password validation and role fetching
-                res = await api.loginUser({ email: data.email, password: data.password });
-
-                // If Worker authentication fails, it throws an error handled by the outer catch block.
-                // If it succeeds, it returns { status: 'SUCCESS', user } or { status: 'OTP_REQUIRED' }
+                
+                // For Super Admin OTP check (Still relies on Worker API for security)
+                if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
+                    const otp = window.prompt("Enter OTP sent to your email:"); 
+                    if(otp) {
+                         const otpRes = await api.verifyOtp(data.email, otp);
+                         if(otpRes.status !== 'SUCCESS') { 
+                            await signOut(authInstance);
+                            throw new Error(otpRes.error || "OTP verification failed.");
+                         }
+                         // OTP successful, manually set super admin role from worker response
+                         userProfile = otpRes.user; 
+                    } else {
+                        await signOut(authInstance);
+                        throw new Error("OTP verification cancelled.");
+                    }
+                } else {
+                    // Normal user login: fetch profile from Firestore
+                    const userRef = doc(db, "users", authResult.user.uid);
+                    const docSnap = await getDoc(userRef);
+                    if (docSnap.exists()) {
+                        userProfile = { uid: authResult.user.uid, email: authResult.user.email, ...docSnap.data() };
+                    } else {
+                        // User exists in Auth but not Firestore (shouldn't happen with full Firebase flow)
+                        await signOut(authInstance);
+                        throw new Error("User profile missing in database.");
+                    }
+                }
             }
             else { // signup
                 authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
-                res = await api.syncUser({ 
-                    uid: authResult.user.uid, 
-                    email: data.email, 
-                    name: data.name, 
-                    branch: data.branch, 
-                    role: data.roleType,
-                    secretCode: data.secretCode
-                });
+                userProfile = await createOrUpdateUserInFirestore(db, authResult.user, data);
             }
 
-            if (res.status === 'OTP_REQUIRED') { 
-                const otp = window.prompt("Enter OTP sent to your email:"); 
-                if(otp) {
-                    const otpRes = await api.verifyOtp(data.email, otp);
-                    if(otpRes.status === 'SUCCESS' && otpRes.user) { 
-                        setUser(otpRes.user); 
-                        // The effect hook handles redirection
-                    }
-                    else {
-                        window.alert(otpRes.error || "OTP verification failed.");
-                        await signOut(authInstance);
-                    }
-                } else {
-                     if (authInstance.currentUser) await signOut(authInstance);
-                    throw new Error("OTP verification cancelled.");
-                }
-            } else if (res.user && res.status === 'SUCCESS') { 
-                setUser(res.user); 
-                // The effect hook handles redirection
-            } else {
-                // This might catch cases where Firebase auth worked but D1 sync failed silently
-                // or if the worker API returns an unexpected structure.
-                if (authInstance.currentUser) await signOut(authInstance);
-                throw new Error("Portal login synchronization failed. Check Worker logs.");
-            }
+            // Final state update. The onAuthStateChanged listener handles the final persistence and redirection.
+            setUser(userProfile);
+            setView(getRoleBasedView(userProfile.role));
+
         } catch(e: any) { 
             console.error("Auth Error:", e);
-            
-            // Crucial cleanup: if Firebase auth succeeded but the D1/Worker sync failed,
-            // we must sign out of Firebase to prevent being stuck in a bad state.
-            if (authInstance.currentUser) {
-                 await signOut(authInstance).catch(err => console.error("Error signing out after sync failure:", err));
-            }
-            
             let displayError = e.message;
             if (e.code && typeof e.code === 'string' && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
@@ -676,20 +789,18 @@ const App = () => {
         }
     };
 
-    // If authentication hasn't initialized yet, show a loading state
     if (!authInitialized) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-[#f4f7f6]">
                 <div className="text-center p-8 bg-white rounded-lg shadow-xl border-t-4 border-[#003366]">
                     <svg className="animate-spin h-8 w-8 text-[#003366] mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                     <p className="font-semibold text-gray-700">Loading essential services...</p>
-                    <p className="text-xs text-gray-500 mt-1">Initializing Firebase Authentication</p>
+                    <p className="text-xs text-gray-500 mt-1">Initializing Firebase (Auth, DB, Storage)</p>
                 </div>
             </div>
         );
     }
 
-    // Determine if the current view is one of the role-based dashboards
     const isDashboardView = ['student_dashboard', 'admin_dashboard', 'super_admin_dashboard'].includes(view);
 
     return (
@@ -703,7 +814,7 @@ const App = () => {
                            <div key={ev.id} className="bg-white p-6 rounded-lg shadow-md border-t-4 border-[#003366] hover:shadow-xl transition duration-300">
                                <div className="flex items-center gap-3 mb-2">
                                     <Calendar size={18} className="text-[#fcb900]"/>
-                                    <p className="text-sm font-semibold text-gray-600">{new Date(ev.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
+                                    <p className="text-sm font-semibold text-gray-600">{new Date(ev.date?.toDate() || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
                                </div>
                                <h3 className="font-extrabold text-xl text-[#003366] mb-2">{ev.title}</h3>
                                <p className="text-sm text-gray-700 line-clamp-3">{ev.description}</p>
@@ -725,7 +836,7 @@ const App = () => {
             {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
             {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
             {/* RENDER DASHBOARD FOR ALL ROLE-BASED VIEWS */}
-            {isDashboardView && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
+            {isDashboardView && user && db && storage && <Dashboard user={user} setUser={setUser} logout={handleSignOut} db={db} storage={storage} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
     );
