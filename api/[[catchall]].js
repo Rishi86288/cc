@@ -1,33 +1,36 @@
 export async function onRequest(context) {
-  // FIX: Use service binding fetch pattern for reliability.
-  // The Pages environment should expose the Worker as a callable service
-  // based on the configuration in the Cloudflare Pages settings.
-  
-  // The Pages Function automatically exposes the `env` object which should
-  // contain the bound Worker if it's correctly configured in the dashboard.
-  // Assuming the binding name is 'CIPET_WORKER' or similar based on standard practice.
-  // We cannot guess the binding name, so we must assume the Pages environment
-  // handles the proxying based on the '/api' prefix and rely on context.
-  
-  // NOTE: If the Cloudflare Pages binding for the Worker is named 'CIPET_WORKER',
-  // you must replace `context.env.CIPET_WORKER.fetch` below.
-  
-  // Reverting to the safer public URL fetch if the environment is a simple local build,
-  // BUT adding a necessary path strip to ensure the Worker receives a valid path.
+  // --- Configuration ---
+  // Worker's public URL (as deployed)
   const WORKER_URL = "https://cipet-portal.rishiforrdp6055.workers.dev";
   
-  // Extract path, removing '/api' prefix
-  const path = context.request.url.replace(context.request.url.split('/api')[0] + '/api', '');
+  // --- Pages Function Logic ---
+
+  // 1. Get the path suffix after the /api/ prefix.
+  // Example: If request.url is https://pages.dev/api/auth/login
+  //          context.functionPath is /api/[[catchall]]
+  //          context.params.catchall is ['auth', 'login']
+  // We want the path to be /auth/login for the Hono worker.
   
-  const workerUrl = new URL(path, WORKER_URL);
+  const pathname = new URL(context.request.url).pathname;
+  // Reliably strip the '/api' prefix and ensure it starts with a '/'
+  const workerPath = pathname.replace(/^\/api/, '');
   
-  const newRequest = new Request(workerUrl, context.request);
+  // 2. Create the URL for the Worker, using the worker's URL as the base
+  const workerUrl = new URL(workerPath, WORKER_URL);
+
+  // 3. Clone the incoming request for the proxy, using the new Worker URL
+  const newRequest = new Request(workerUrl.toString(), {
+    method: context.request.method,
+    headers: context.request.headers,
+    body: context.request.body,
+    redirect: 'manual', // Important for proxying POST/PUT requests
+  });
   
-  // Perform the fetch to the public Worker URL
+  // 4. Perform the fetch to the public Worker URL
   try {
       return await fetch(newRequest);
   } catch (e) {
       console.error("Worker Proxy Error:", e);
-      return new Response(`Proxy Error: Could not reach Worker at ${WORKER_URL}. Check Cloudflare Service Bindings or Worker deployment.`, { status: 503 });
+      return new Response(`Proxy Error 503: Could not reach Worker at ${WORKER_URL}.`, { status: 503 });
   }
 }
