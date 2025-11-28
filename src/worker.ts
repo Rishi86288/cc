@@ -16,18 +16,22 @@ export default {
     const url = new URL(request.url);
     const method = request.method;
     
+    // CORS Headers
     const headers = { 
       "Access-Control-Allow-Origin": "*", 
-      "Access-Control-Allow-Methods": "*", 
-      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS", 
+      "Access-Control-Allow-Headers": "Content-Type",
       "Content-Type": "application/json" 
     };
 
     if (method === "OPTIONS") return new Response(null, { headers });
 
+    // Prefix '/api' handling
+    const path = url.pathname.replace('/api', '');
+
     try {
-        // --- AUTHENTICATION ---
-        if (url.pathname === "/api/auth/login" && method === "POST") {
+        // --- 1. AUTHENTICATION ---
+        if (path === "/auth/login" && method === "POST") {
             const { email, password } = await request.json() as any;
             
             if (email === env.SUPER_ADMIN_EMAIL) { 
@@ -43,77 +47,17 @@ export default {
             return new Response(JSON.stringify({ status: 'SUCCESS', user }), { headers });
         }
 
-        if (url.pathname === "/api/auth/verify-otp" && method === "POST") {
-            const { email, otp } = await request.json() as any;
-            const stored = await env.OTP_KV.get(email);
-            if (stored === otp) {
-                await env.OTP_KV.delete(email);
-                return new Response(JSON.stringify({ status: 'SUCCESS', user: { id: 1, name: "Super Admin", email, role: "super_admin", branch: "ADMIN" } }), { headers });
-            }
-            return new Response(JSON.stringify({ error: "Invalid OTP" }), { status: 403, headers });
-        }
-
-        if (url.pathname === "/api/auth/register" && method === "POST") {
-            const data: any = await request.json();
-            try {
-                await env.DB.prepare("INSERT INTO users (name, email, password, role, branch) VALUES (?, ?, ?, ?, ?)").bind(data.name, data.email, data.password, data.roleType, data.branch).run();
-                const newUser = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(data.email).first();
-                return new Response(JSON.stringify({ status: 'SUCCESS', user: newUser }), { headers });
-            } catch(e) {
-                return new Response(JSON.stringify({ error: "User exists" }), { status: 400, headers });
-            }
-        }
-
-        // --- PROFILE & UPGRADES ---
-
-        // Update Profile
-        if (url.pathname === "/api/user/profile" && method === "PUT") {
-            const { id, name, branch, phone } = await request.json() as any;
-            await env.DB.prepare("UPDATE users SET name = ?, branch = ?, phone = ? WHERE id = ?").bind(name, branch, phone, id).run();
-            return new Response(JSON.stringify({ success: true }), { headers });
-        }
-
-        // Request Upgrade to Admin
-        if (url.pathname === "/api/user/upgrade" && method === "POST") {
-            const { id } = await request.json() as any;
-            await env.DB.prepare("UPDATE users SET upgrade_status = 'pending' WHERE id = ?").bind(id).run();
-            return new Response(JSON.stringify({ success: true }), { headers });
-        }
-
-        // Get Pending Upgrades (Super Admin)
-        if (url.pathname === "/api/admin/upgrades" && method === "GET") {
-            const { results } = await env.DB.prepare("SELECT * FROM users WHERE upgrade_status = 'pending'").all();
-            return new Response(JSON.stringify(results), { headers });
-        }
-
-        // Approve Upgrade
-        if (url.pathname === "/api/admin/approve" && method === "POST") {
-            const { userId, secret } = await request.json() as any;
-            
-            // Security Check
-            if (secret !== env.ADMIN_SECRET_KEY) return new Response(JSON.stringify({ error: "Invalid Admin Key" }), { status: 403, headers });
-
-            await env.DB.prepare("UPDATE users SET role = 'event_admin', upgrade_status = 'approved' WHERE id = ?").bind(userId).run();
-            return new Response(JSON.stringify({ success: true }), { headers });
-        }
-
-        // --- EVENTS ---
-        
-        if (url.pathname === "/api/events" && method === "POST") {
-            const formData = await request.formData();
-            const file = formData.get('attachment') as File | null;
-            if(file) await env.FILES_BUCKET.put(file.name, file.stream());
-
-            await env.DB.prepare("INSERT INTO events (title, date, branch, fee, is_paid, description, attachment_url, created_by_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(
-              formData.get('title'), formData.get('date'), formData.get('branch'), formData.get('fee'), 
-              formData.get('isPaid') === 'true' ? 1 : 0, formData.get('desc'), file ? file.name : null, formData.get('email')
-            ).run();
-            return new Response(JSON.stringify({ success: true }), { headers });
-        }
-
-        if (url.pathname === "/api/events" && method === "GET") {
+        // --- 2. EVENTS ---
+        if (path === "/events" && method === "GET") {
             const { results } = await env.DB.prepare("SELECT * FROM events ORDER BY created_at DESC").all();
             return new Response(JSON.stringify(results), { headers });
+        }
+
+        // --- 3. FILES ---
+        if (path === "/files" && method === "GET") {
+            const list = await env.FILES_BUCKET.list();
+            const files = list.objects.map(o => ({ name: o.key, size: o.size, date: o.uploaded }));
+            return new Response(JSON.stringify(files), { headers });
         }
 
         return new Response("Not Found", { status: 404, headers });
