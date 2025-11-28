@@ -8,6 +8,7 @@ import {
 // --- FIREBASE IMPORTS (Client-side Auth) ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { Console } from 'console';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
@@ -23,6 +24,7 @@ const firebaseConfig = {
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM"
 };
+
 // Initialize Firebase
 let auth: any = null;
 try {
@@ -345,7 +347,6 @@ const Dashboard = ({ user, setUser, logout }: any) => {
     );
 };
 
-// --- MAIN APP ---
 const App = () => {
     const [view, setView] = useState('home');
     const [user, setUser] = useState<any>(null);
@@ -360,26 +361,21 @@ const App = () => {
             let res;
             if (mode === 'google') {
                 const result = await signInWithPopup(auth, googleProvider);
-                // Sync user with D1/Worker after successful Firebase Auth
                 res = await api.syncUser({ 
                     uid: result.user.uid, 
                     email: result.user.email, 
                     name: result.user.displayName,
-                    branch: data.branch || 'General'
+                    branch: data.branch || 'General' 
                 });
             }
             else if (mode === 'login') {
-                // Sign in via Firebase Email/Password
                 await signInWithEmailAndPassword(auth, data.email, data.password);
-                // Get user data (including D1 role) from Worker
                 res = await api.syncUser({ email: data.email }); 
             }
             else {
-                // Register via Firebase
-                const result = await createUserWithEmailAndPassword(auth, data.email, data.password);
-                // Sync data to D1
+                await createUserWithEmailAndPassword(auth, data.email, data.password);
                 res = await api.syncUser({ 
-                    uid: result.user.uid, 
+                    uid: auth.currentUser.uid, 
                     email: data.email, 
                     name: data.name, 
                     branch: data.branch, 
