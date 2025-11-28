@@ -8,7 +8,7 @@ import {
 // --- CONFIGURATION ---
 const USE_MOCK_API = false;
 // Update this with your deployed Worker URL
-const API_BASE_URL = "https://vite-react-template.rishiforrdp6055.workers.dev"; 
+const API_BASE_URL = "/api"; 
 
 // --- SERVICE LAYER ---
 const api = {
