@@ -7,7 +7,7 @@ import {
 
 // --- CONFIGURATION ---
 const USE_MOCK_API = false; // Set to FALSE for production
-const API_BASE_URL = "/api"; // Relative path for Cloudflare Pages Functions
+const API_BASE_URL = "https://vite-react-template.rishiforrdp6055.workers.dev/api";
 
 // --- SERVICE LAYER ---
 const api = {
