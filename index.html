@@ -4,9 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CIPET IPT Ahmedabad</title>
+    
+    <!-- CRITICAL FIX: Firebase CDN Scripts -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-auth-compat.js"></script>
+    <!-- End Firebase CDN Scripts -->
+
   </head>
   <body>
     <div id="root"></div>
+    <!-- The main script runs AFTER the Firebase SDK is loaded -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
