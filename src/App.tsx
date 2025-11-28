@@ -8,7 +8,6 @@ import {
 // --- FIREBASE IMPORTS (Client-side Auth) ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { Console } from 'console';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
@@ -24,7 +23,6 @@ const firebaseConfig = {
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM"
 };
-
 // Initialize Firebase
 let auth: any = null;
 try {
@@ -61,7 +59,6 @@ const fetchJson = async (url: string, options: any = {}) => {
 
 // --- SERVICE LAYER ---
 const api = {
-    // Auth (Worker only handles D1 synchronization and Admin logic)
     syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
     createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
