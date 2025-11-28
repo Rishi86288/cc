@@ -6,17 +6,12 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// Dynamically determine API URL to prevent "Failed to parse URL" errors
-const getApiBaseUrl = () => {
-    // If we are on the deployed Pages site, use the proxy
-    if (window.location.hostname.includes('pages.dev')) {
-        return "/api";
-    }
-    // Fallback for local dev or preview environments (Direct Worker Access)
-    return "https://vite-react-template.rishiforrdp6055.workers.dev/api"; 
-};
-
-const API_BASE_URL = getApiBaseUrl();
+// If running on Cloudflare Pages (production), use relative path.
+// If running locally/preview where relative paths fail, use the full worker URL.
+const IS_PROD = window.location.hostname.includes('pages.dev');
+const API_BASE_URL = IS_PROD 
+  ? "/api" 
+  : "https://cipet-portal.rishiforrdp6055.workers.dev/api"; // Fallback to direct worker
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (endpoint: string, options: any = {}) => {
