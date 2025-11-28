@@ -18,6 +18,10 @@ bucket_name = "cipet-files"
 binding = "OTP_KV"
 id = "970999ee5b6a485cbd03036c5ce325cb"
 
+services = [
+  { binding = "BIND" service = "cipet-portal" }
+]
+
 # Note: Environment Variables like SUPER_ADMIN_EMAIL and ADMIN_SECRET_KEY 
 # should be set securely via the Cloudflare Dashboard or using:
 # npx wrangler secret put KEY_NAME
