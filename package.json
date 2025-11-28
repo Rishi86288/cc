@@ -27,13 +27,3 @@
     "@cloudflare/workers-types": "^4.20240208.0"
   }
 }
-```
-
-### **3. Fix Backend File Extension**
-Your backend file `src/worker.js` contains TypeScript code (interfaces, types), but it has a `.js` extension. This prevents it from compiling correctly.
-
-* **Rename File:** Rename `src/worker.js` to `src/worker.ts`.
-* **Open:** `wrangler.toml`
-* **Update the `main` line:**
-    ```toml
-    main = "src/worker.ts"
