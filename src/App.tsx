@@ -5,8 +5,19 @@ import {
   Menu, Settings, Folder, File, Trash2, Key, CheckCircle, CreditCard, ArrowRight, ShieldAlert, Plus, Edit3
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS (We only import TYPES here, the code uses global window.firebase) ---
-import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+// --- FIREBASE IMPORTS ---
+// We use the modern imports here. The application assumes the global
+// Firebase compat SDKs are loaded in index.html for compatibility.
+import { 
+    getAuth, 
+    signInWithPopup, 
+    GoogleAuthProvider, 
+    createUserWithEmailAndPassword, 
+    signInWithEmailAndPassword, 
+    signOut,
+    Auth, // Type import
+    UserCredential // Type import
+} from 'firebase/auth';
 
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
@@ -21,19 +32,28 @@ const firebaseConfig = {
   messagingSenderId: "481989168469",
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc"
 };
-// Initialize Firebase
-let auth: any = null;
+
+// Check if configuration has been updated from the placeholder text
+const PLACEHOLDER_KEY = "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE";
+const isConfigured = !firebaseConfig.apiKey.includes(PLACEHOLDER_KEY);
+
+// Initialize Firebase services
+let authInstance: Auth | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
-const isConfigured = !firebaseConfig.apiKey.includes('AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE');
 
 if (isConfigured) {
     try {
         // Initialize the app from the globally loaded SDK
-        const app = (window as any).firebase.initializeApp(firebaseConfig);
-        auth = (window as any).firebase.auth(app); // Use auth compat API
-        googleProvider = new GoogleAuthProvider();
+        const firebase = (window as any).firebase; // Access global compat SDK
+        if (firebase) {
+            const app = firebase.initializeApp(firebaseConfig);
+            authInstance = firebase.auth(app); // Use auth compat API
+            googleProvider = new GoogleAuthProvider();
+        } else {
+            console.error("FATAL: Firebase global SDK not found. Check index.html.");
+        }
     } catch (e) {
-        console.error("FATAL: Firebase initialization failed. Check your API keys.", e);
+        console.error("FATAL: Firebase initialization failed. Check your API keys and index.html SDKs.", e);
     }
 }
 
@@ -61,17 +81,21 @@ const fetchJson = async (url: string, options: any = {}) => {
 // --- SERVICE LAYER ---
 const api = {
     syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    // Note: The /auth/login route is not used in the frontend as Firebase handles password auth
+    // We are using /auth/register and /auth/sync after Firebase auth is complete.
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
-    createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
+    createEvent: (fd: FormData) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
     getFiles: () => fetchJson(`${API_BASE_URL}/files`),
-    uploadFile: (file) => {
+    uploadFile: (file: File) => {
         const fd = new FormData(); fd.append('file', file);
         return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
     },
-    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' }),
+    deleteFile: (name: string) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' }),
     getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
-    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
-    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
+    approveUpgrade: (userId: string, secret: string) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    verifyOtp: (email: string, otp: string) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
+    requestUpgrade: (id: string) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
+    updateProfile: (data: any) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
 };
 
 // --- COMPONENTS ---
@@ -105,7 +129,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const submit = async (e: any) => { 
+    const submit = async (e: React.FormEvent) => { 
         e.preventDefault(); 
         setLoading(true);
         setError('');
@@ -129,7 +153,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
                 
-                {/* Configuration Error Message */}
+                {/* Configuration Error Message - Hidden now that keys are updated */}
                 {!isConfigured && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">ERROR: Please update 'firebaseConfig' in src/App.tsx.</div>}
                 {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
@@ -148,8 +172,8 @@ const Auth = ({ mode, setView, onAuth }: any) => {
                         <>
                             <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={e => setData({...data, name: e.target.value})} required />
                             <div className="flex gap-2">
-                                <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
-                                <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
+                                <select className="w-full border p-2 rounded bg-white" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
+                                <select className="w-full border p-2 rounded bg-white" value={data.roleType} onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
                             </div>
                             {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
                                 <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
@@ -173,22 +197,44 @@ const Auth = ({ mode, setView, onAuth }: any) => {
 
 const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
+    
+    // Use a custom modal instead of alert/confirm
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveMessage, setSaveMessage] = useState('');
+
     const handleSave = async () => {
+        setIsSaving(true);
+        setSaveMessage('');
         try {
+            // Note: The original code used api.updateProfile which is defined below
             await api.updateProfile(data);
             onUpdate(data);
-            alert('Profile Updated!');
-        } catch(e: any) { alert(e.message); }
+            setSaveMessage('Profile Updated Successfully!');
+        } catch(e: any) { 
+            setSaveMessage(`Error updating profile: ${e.message}`);
+        } finally {
+            setIsSaving(false);
+            setTimeout(() => setSaveMessage(''), 3000); // Clear message after 3 seconds
+        }
     };
+    
     return (
         <div className="bg-white p-6 rounded shadow border">
             <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><UserCircle/> Edit Profile</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div><label className="text-xs font-bold text-gray-500">Name</label><input className="w-full border p-2 rounded" value={data.name} onChange={e => setData({...data, name: e.target.value})} /></div>
+                <div><label className="text-xs font-bold text-gray-500">Name</label><input className="w-full border p-2 rounded" value={data.name || ''} onChange={e => setData({...data, name: e.target.value})} /></div>
+                <div><label className="text-xs font-bold text-gray-500">Email</label><input className="w-full border p-2 rounded bg-gray-100" value={data.email || ''} readOnly /></div>
                 <div><label className="text-xs font-bold text-gray-500">Phone</label><input className="w-full border p-2 rounded" value={data.phone || ''} onChange={e => setData({...data, phone: e.target.value})} /></div>
                 <div><label className="text-xs font-bold text-gray-500">Branch</label><select className="w-full border p-2 rounded" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select></div>
             </div>
-            <button onClick={handleSave} className="bg-[#003366] text-white px-4 py-2 rounded text-sm font-bold">Save Changes</button>
+            <button onClick={handleSave} disabled={isSaving} className="bg-[#003366] text-white px-4 py-2 rounded text-sm font-bold disabled:opacity-50">
+                {isSaving ? 'Saving...' : 'Save Changes'}
+            </button>
+            {saveMessage && (
+                <div className={`mt-4 p-2 text-sm rounded ${saveMessage.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                    {saveMessage}
+                </div>
+            )}
         </div>
     );
 };
@@ -196,35 +242,211 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
 const AdminApprovals = () => {
     const [reqs, setReqs] = useState<any[]>([]);
     const [secret, setSecret] = useState('');
+    const [message, setMessage] = useState('');
 
-    useEffect(() => { api.getUpgrades().then(data => { if(Array.isArray(data)) setReqs(data); }); }, []);
+    const fetchUpgrades = () => {
+        api.getUpgrades()
+            .then(data => { 
+                if(Array.isArray(data)) setReqs(data); 
+                setMessage('');
+            })
+            .catch(e => setMessage(`Error fetching requests: ${e.message}`));
+    };
 
-    const handleApprove = async (id: number) => {
+    useEffect(() => { fetchUpgrades(); }, []);
+
+    const handleApprove = async (id: string) => {
+        setMessage('');
+        if (!secret) {
+            setMessage("Please enter the Admin Secret Key first.");
+            return;
+        }
         try {
             await api.approveUpgrade(id, secret);
-            alert("User Upgraded!"); 
-            api.getUpgrades().then(setReqs);
-        } catch(e: any) { alert(e.message); }
+            setMessage("User Upgraded Successfully!"); 
+            fetchUpgrades();
+        } catch(e: any) { 
+            setMessage(`Error: ${e.message}`);
+        }
     };
 
     return (
         <div className="bg-white p-6 rounded shadow border">
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-lg flex items-center gap-2"><ShieldAlert className="text-red-500"/> Pending Requests</h3>
-                <input type="password" placeholder="Admin Secret Key" className="border p-2 rounded text-xs w-48" onChange={e => setSecret(e.target.value)} />
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+                <h3 className="font-bold text-lg flex items-center gap-2"><ShieldAlert className="text-red-500"/> Pending Upgrade Requests</h3>
+                <input 
+                    type="password" 
+                    placeholder="Admin Secret Key" 
+                    className="border p-2 rounded text-xs w-full sm:w-48 bg-red-50" 
+                    onChange={e => setSecret(e.target.value)} 
+                    value={secret}
+                />
             </div>
+            {message && (
+                <div className={`mb-4 p-2 text-sm rounded ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                    {message}
+                </div>
+            )}
             <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Action</th></tr></thead>
+                <thead className="bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Branch</th><th className="p-2">Action</th></tr></thead>
                 <tbody>
                     {reqs.map((u: any) => (
                         <tr key={u.id} className="border-b">
-                            <td className="p-2">{u.name}</td><td className="p-2">{u.email}</td>
-                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold">Approve</button></td>
+                            <td className="p-2">{u.name}</td>
+                            <td className="p-2">{u.email}</td>
+                            <td className="p-2">{u.branch}</td>
+                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold disabled:opacity-50" disabled={!secret}>Approve</button></td>
                         </tr>
                     ))}
-                    {reqs.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-gray-400">No pending requests.</td></tr>}
+                    {reqs.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-gray-400">No pending requests.</td></tr>}
                 </tbody>
             </table>
+        </div>
+    );
+};
+
+const EventManager = ({ user }: any) => {
+    const [showCreate, setShowCreate] = useState(false);
+    const [message, setMessage] = useState('');
+    const [events, setEvents] = useState<any[]>([]);
+
+    const fetchEvents = () => {
+        api.getEvents()
+            .then(data => { if(Array.isArray(data)) setEvents(data); })
+            .catch(e => setMessage(`Error fetching events: ${e.message}`));
+    };
+
+    useEffect(() => { fetchEvents(); }, []);
+
+    const handleCreate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setMessage('');
+        const form = e.target as HTMLFormElement;
+        const fd = new FormData(form);
+        
+        // Ensure checkbox value is correctly set
+        const isPaidInput = form.querySelector('input[name="isPaid"]') as HTMLInputElement;
+        fd.append('isPaid', isPaidInput.checked ? 'true' : 'false');
+        fd.append('userEmail', user.email);
+        
+        try {
+            await api.createEvent(fd);
+            setMessage("Event Posted Successfully!");
+            setShowCreate(false);
+            fetchEvents();
+            form.reset();
+        } catch(e: any) {
+            setMessage(`Error posting event: ${e.message}`);
+        }
+    };
+
+    return (
+        <div>
+            {message && (
+                <div className={`mb-4 p-2 text-sm rounded ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                    {message}
+                </div>
+            )}
+            <button onClick={() => setShowCreate(!showCreate)} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold mb-4 flex gap-2 items-center hover:bg-yellow-400 transition"><Plus size={16}/> {showCreate ? 'Hide Form' : 'New Event'}</button>
+            {showCreate && (
+                <div className="bg-white p-6 rounded shadow border mb-6">
+                    <h3 className="font-bold mb-4 flex items-center gap-2"><Edit3 size={18} /> Post New Event</h3>
+                    <form onSubmit={handleCreate} className="space-y-4">
+                        <input name="title" className="w-full border p-2 rounded" placeholder="Event Title" required />
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <input name="date" type="date" className="w-full border p-2 rounded" required />
+                            <input name="fee" type="number" className="w-full border p-2 rounded" placeholder="Fee (₹, 0 for free)" defaultValue={0} />
+                            <select name="branch" className="w-full border p-2 rounded bg-white">
+                                <option value="">All Branches</option><option>STC</option><option>DIPLOMA</option><option>BE</option>
+                            </select>
+                        </div>
+                        <textarea name="desc" className="w-full border p-2 rounded" placeholder="Detailed Description..." rows={4}></textarea>
+                        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                            <label className="flex gap-2 text-sm font-medium items-center"><input type="checkbox" name="isPaid" className="h-4 w-4 text-[#003366] rounded" /> This is a Paid Event</label>
+                            <label className="text-sm font-medium">Attachment (Optional): <input type="file" name="attachment" className="text-xs file:mr-4 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#003366] file:text-white"/></label>
+                        </div>
+                        <button type="submit" className="bg-[#003366] text-white px-4 py-2 rounded font-bold hover:bg-blue-900 transition">Publish Event</button>
+                    </form>
+                </div>
+            )}
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {events.map((ev: any) => (
+                    <div key={ev.id} className="bg-white p-4 rounded shadow border-l-4 border-[#fcb900]">
+                        <h4 className="font-bold text-[#003366]">{ev.title}</h4>
+                        <p className="text-xs text-gray-500 mb-2">{new Date(ev.date).toLocaleDateString()} | Fee: ₹{ev.fee || '0'} {ev.is_paid ? '(Paid)' : '(Free)'}</p>
+                        <p className="text-sm line-clamp-2">{ev.description}</p>
+                        {ev.attachment_url && <a href={`/api/files/${ev.attachment_url}`} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"><File size={14} /> Attachment</a>}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const FileManager = ({ files, setFiles }: { files: any[], setFiles: React.Dispatch<React.SetStateAction<any[]>> }) => {
+    const [message, setMessage] = useState('');
+    
+    const fetchFiles = () => {
+        api.getFiles()
+            .then(data => { if(Array.isArray(data)) setFiles(data); })
+            .catch(e => setMessage(`Error fetching files: ${e.message}`));
+    };
+
+    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        setMessage('');
+        if(e.target.files && e.target.files[0]) { 
+            try {
+                await api.uploadFile(e.target.files[0]); 
+                setMessage(`File ${e.target.files[0].name} uploaded successfully!`);
+                fetchFiles();
+            } catch(e: any) {
+                setMessage(`Error uploading file: ${e.message}`);
+            }
+        }
+    };
+
+    const handleDeleteFile = async (name: string) => {
+        // Using custom logic instead of confirm()
+        if (window.prompt(`To confirm deletion of "${name}", type DELETE below:`) === 'DELETE') {
+            try {
+                await api.deleteFile(name);
+                setMessage(`File ${name} deleted successfully!`);
+                fetchFiles();
+            } catch(e: any) {
+                setMessage(`Error deleting file: ${e.message}`);
+            }
+        } else {
+             setMessage(`Deletion of ${name} cancelled.`);
+        }
+    };
+
+    return (
+        <div className="bg-white rounded shadow overflow-hidden border border-gray-200">
+            <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
+                <h3 className="font-bold flex items-center gap-2"><Folder size={18} /> Cloud Files (R2)</h3>
+                <label className="bg-[#003366] text-white px-3 py-1 rounded text-sm cursor-pointer flex gap-1 items-center hover:bg-blue-900 transition"><Upload size={14}/> Upload <input type="file" className="hidden" onChange={handleUpload}/></label>
+            </div>
+            {message && (
+                <div className={`p-3 text-sm ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                    {message}
+                </div>
+            )}
+            <div className="divide-y divide-gray-100">
+                {files.map((f:any) => (
+                    <div key={f.name} className="p-3 text-sm flex justify-between items-center hover:bg-gray-50">
+                        <span className="flex gap-2 items-center">
+                            <FileText size={16} className="text-[#003366]"/> 
+                            <a href={`/api/files/${f.name}`} target="_blank" className="text-blue-600 hover:underline">{f.name}</a>
+                        </span>
+                        <div className="flex items-center gap-4">
+                            <span className="text-gray-500 text-xs">{Math.round(f.size / 1024)} KB</span>
+                            <button onClick={() => handleDeleteFile(f.name)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100"><Trash2 size={16}/></button>
+                        </div>
+                    </div>
+                ))}
+                {files.length === 0 && <div className="p-4 text-center text-gray-400">No files uploaded.</div>}
+            </div>
         </div>
     );
 };
@@ -232,58 +454,51 @@ const AdminApprovals = () => {
 const Dashboard = ({ user, setUser, logout }: any) => {
     const [activeTab, setActiveTab] = useState('overview');
     const [files, setFiles] = useState([]);
-    const [showCreate, setShowCreate] = useState(false);
-
-    useEffect(() => { if(activeTab === 'files') api.getFiles().then(setFiles); }, [activeTab]);
-
-    const handleCreate = async (e: any) => {
-        e.preventDefault();
-        const fd = new FormData(e.target);
-        fd.append('isPaid', e.target.isPaid.checked);
-        fd.append('userEmail', user.email);
-        await api.createEvent(fd);
-        alert("Event Posted!");
-        setShowCreate(false);
-    };
-
-    const handleUpload = async (e: any) => {
-        if(e.target.files[0]) { await api.uploadFile(e.target.files[0]); api.getFiles().then(setFiles); }
-    };
+    
+    // Fetch files only when the tab is active
+    useEffect(() => { 
+        if(activeTab === 'files') {
+            api.getFiles().then(data => { if(Array.isArray(data)) setFiles(data); }); 
+        } 
+    }, [activeTab]);
 
     const handleUpgrade = async () => {
-         try {
-            await api.requestUpgrade(user.id);
-            alert("Upgrade Request Sent!");
-         } catch (e: any) { alert(e.message); }
-    };
-
-    const handleDeleteFile = async (name: string) => {
-        if(confirm("Delete file?")) {
-            await api.deleteFile(name);
-            api.getFiles().then(setFiles);
-        }
+         // Using custom prompt instead of alert/confirm
+         const confirmation = window.prompt("Type 'CONFIRM' to request an upgrade to Event Admin role:");
+         if(confirmation === 'CONFIRM') {
+             try {
+                await api.requestUpgrade(user.id);
+                setUser({...user, upgrade_status: 'pending'}); // Optimistically update local state
+                window.alert("Upgrade Request Sent! An admin will review it soon.");
+             } catch (e: any) { 
+                window.alert(`Error sending upgrade request: ${e.message}`); 
+             }
+         } else if (confirmation !== null) {
+             window.alert("Upgrade request cancelled.");
+         }
     };
 
     return (
         <div className="max-w-7xl mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 min-h-[60vh]">
             <div className="w-full md:w-64 bg-white rounded shadow h-fit pb-4 border border-gray-200">
                 <div className="p-6 bg-[#003366] text-center text-white mb-2">
-                    <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name[0]}</div>
+                    <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name?.[0] || 'U'}</div>
                     <h3 className="font-bold truncate">{user.name}</h3>
                     <p className="text-xs uppercase opacity-75">{user.role}</p>
+                    <p className="text-[10px] opacity-60 mt-1">ID: {user.id}</p>
                 </div>
                 <nav className="px-2 space-y-1">
                     <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='overview'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><LayoutDashboard size={16}/> Overview</button>
                     <button onClick={() => setActiveTab('profile')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='profile'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><UserCircle size={16}/> Profile</button>
                     
                     {(user.role === 'super_admin' || user.role === 'event_admin') && (
-                        <button onClick={() => setActiveTab('events')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Calendar size={16}/> Manage Events</button>
+                        <button onClick={() => setActiveTab('events')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='events'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><Calendar size={16}/> Manage Events</button>
                     )}
                     
                     {user.role === 'super_admin' && (
                         <>
-                            <button onClick={() => setActiveTab('files')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Folder size={16}/> File Manager</button>
-                            <button onClick={() => setActiveTab('approvals')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100 text-red-600"><ShieldAlert size={16}/> Approvals</button>
+                            <button onClick={() => setActiveTab('files')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='files'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><Folder size={16}/> File Manager</button>
+                            <button onClick={() => setActiveTab('approvals')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='approvals'?'bg-red-50 text-red-600':'text-red-600 hover:bg-red-100'}`}><ShieldAlert size={16}/> Approvals</button>
                         </>
                     )}
                     <button onClick={logout} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-red-600 hover:bg-red-50"><LogOut size={16}/> Sign Out</button>
@@ -299,50 +514,21 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                     <div className="space-y-6">
                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="bg-white p-6 rounded shadow border-l-4 border-[#003366]"><p className="text-xs font-bold text-gray-500 uppercase">Status</p><p className="text-2xl font-bold text-[#003366]">Active</p></div>
+                             <div className="bg-white p-6 rounded shadow border-l-4 border-[#fcb900]"><p className="text-xs font-bold text-gray-500 uppercase">Role</p><p className="text-2xl font-bold text-[#fcb900] capitalize">{user.role.replace('_', ' ')}</p></div>
+                             <div className="bg-white p-6 rounded shadow border-l-4 border-[#003366]"><p className="text-xs font-bold text-gray-500 uppercase">Branch</p><p className="text-2xl font-bold text-[#003366]">{user.branch}</p></div>
                         </div>
                         {user.role === 'student' && (
                             <div className="bg-white p-6 rounded shadow border border-blue-100 flex justify-between items-center">
                                 <div><h3 className="font-bold text-[#003366]">Student Corner</h3><p className="text-sm text-gray-600">Request access to become an Event Admin.</p></div>
-                                {user.upgrade_status === 'pending' ? <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm font-bold">Pending</span> : <button onClick={handleUpgrade} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow hover:bg-yellow-400">Request Upgrade</button>}
+                                {user.upgrade_status === 'pending' ? <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm font-bold">Pending Approval</span> : <button onClick={handleUpgrade} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow hover:bg-yellow-400">Request Upgrade</button>}
                             </div>
                         )}
                     </div>
                 )}
 
                 {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals />}
-
-                {activeTab === 'events' && (
-                    <div>
-                        <button onClick={() => setShowCreate(!showCreate)} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold mb-4 flex gap-2 items-center"><Plus size={16}/> New Event</button>
-                        {showCreate && (
-                            <div className="bg-white p-6 rounded shadow border mb-6">
-                                <h3 className="font-bold mb-4">Post Event</h3>
-                                <form onSubmit={handleCreate} className="space-y-4">
-                                    <input name="title" className="w-full border p-2 rounded" placeholder="Title" required />
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <input name="date" type="date" className="w-full border p-2 rounded" required />
-                                        <input name="fee" type="number" className="w-full border p-2 rounded" placeholder="Fee (₹)" />
-                                    </div>
-                                    <textarea name="desc" className="w-full border p-2 rounded" placeholder="Description..."></textarea>
-                                    <div className="flex gap-4 items-center"><label className="flex gap-2 text-sm"><input type="checkbox" name="isPaid" /> Paid?</label><input type="file" name="attachment" className="text-xs"/></div>
-                                    <button className="bg-[#003366] text-white px-4 py-2 rounded font-bold">Publish Event</button>
-                                </form>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {activeTab === 'files' && (
-                    <div className="bg-white rounded shadow overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-                            <h3 className="font-bold">Cloud Files</h3>
-                            <label className="bg-[#003366] text-white px-3 py-1 rounded text-xs cursor-pointer flex gap-1 items-center"><Upload size={14}/> Upload <input type="file" className="hidden" onChange={handleUpload}/></label>
-                        </div>
-                        {files.map((f:any, i:number) => (
-                            <div key={i} className="p-3 border-b text-sm flex justify-between"><span className="flex gap-2"><FileText size={16}/> {f.name}</span><div className="flex items-center gap-4"><span className="text-gray-500">{f.size}</span><button onClick={() => handleDeleteFile(f.name)} className="text-red-500 hover:text-red-700"><Trash2 size={16}/></button></div></div>
-                        ))}
-                    </div>
-                )}
+                {activeTab === 'events' && (user.role === 'super_admin' || user.role === 'event_admin') && <EventManager user={user} />}
+                {activeTab === 'files' && user.role === 'super_admin' && <FileManager files={files} setFiles={setFiles} />}
             </div>
         </div>
     );
@@ -354,34 +540,40 @@ const App = () => {
     const [events, setEvents] = useState<any[]>([]);
 
     useEffect(() => { 
-        api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error(e)); 
+        api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error("Error fetching initial events:", e)); 
     }, []);
 
     const handleAuth = async (mode: string, data: any) => {
-        if (!isConfigured) {
-             alert("Configuration Error: Please update Firebase API keys in src/App.tsx.");
-             return;
+        if (!isConfigured || !authInstance || !googleProvider) {
+             throw new Error("Configuration Error: Firebase not initialized.");
         }
 
         try {
+            let authResult: UserCredential | null = null;
             let res;
+            
             if (mode === 'google') {
-                const result = await signInWithPopup(authInstance!, googleProvider!);
+                authResult = await signInWithPopup(authInstance, googleProvider);
                 res = await api.syncUser({ 
-                    uid: result.user.uid, 
-                    email: result.user.email, 
-                    name: result.user.displayName,
+                    uid: authResult.user.uid, 
+                    email: authResult.user.email, 
+                    name: authResult.user.displayName,
                     branch: data.branch || 'General' 
                 });
             }
             else if (mode === 'login') {
-                await signInWithEmailAndPassword(authInstance!, data.email, data.password);
-                res = await api.syncUser({ email: data.email }); 
+                authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
+                // For Super Admin login, the Worker handles OTP verification
+                if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
+                    res = { status: 'OTP_REQUIRED' }; // Trigger OTP check in client
+                } else {
+                    res = await api.syncUser({ email: data.email }); 
+                }
             }
-            else {
-                await createUserWithEmailAndPassword(authInstance!, data.email, data.password);
+            else { // signup
+                authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
                 res = await api.syncUser({ 
-                    uid: authInstance!.currentUser!.uid, 
+                    uid: authResult.user.uid, 
                     email: data.email, 
                     name: data.name, 
                     branch: data.branch, 
@@ -391,23 +583,38 @@ const App = () => {
             }
 
             if (res.status === 'OTP_REQUIRED') { 
-                const otp = prompt("Enter OTP sent to Email:"); 
+                const otp = window.prompt("Enter OTP sent to your email:"); 
                 if(otp) {
                     const otpRes = await api.verifyOtp(data.email, otp);
-                    if(otpRes.status === 'SUCCESS') { setUser(otpRes.user); setView('dashboard'); }
-                    else alert(otpRes.error);
+                    if(otpRes.status === 'SUCCESS' && otpRes.user) { 
+                        setUser(otpRes.user); 
+                        setView('dashboard'); 
+                    }
+                    else {
+                        // Using window.alert instead of alert()
+                        window.alert(otpRes.error || "OTP verification failed.");
+                        // Force sign out if auth succeeded but OTP failed to prevent hanging state
+                        await signOut(authInstance);
+                    }
+                } else {
+                    // If user cancels OTP prompt, sign out if they were signed in (for super admin case)
+                     if (authInstance.currentUser) await signOut(authInstance);
+                    throw new Error("OTP verification cancelled.");
                 }
             } else if (res.user) { 
-                setUser(res.user); setView('dashboard'); 
+                setUser(res.user); 
+                setView('dashboard'); 
             } else {
-                throw new Error("Unknown Auth Error");
+                throw new Error("Unknown authentication flow error.");
             }
         } catch(e: any) { 
+            console.error("Auth Error:", e);
             let displayError = e.message;
-            if (e.code && e.code.includes('auth/')) {
+            if (e.code && typeof e.code === 'string' && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
             }
-            throw new Error(displayError); // Re-throw to be caught by Auth component
+            // Re-throw to be caught by Auth component
+            throw new Error(displayError); 
         }
     };
 
@@ -416,7 +623,7 @@ const App = () => {
             signOut(authInstance).then(() => {
                 setUser(null);
                 setView('home');
-            }).catch(err => alert(err.message));
+            }).catch(err => window.alert(err.message)); // Use window.alert
         } else {
             setUser(null);
             setView('home');
@@ -424,18 +631,32 @@ const App = () => {
     };
 
     return (
-        <div className="min-h-screen flex flex-col bg-[#f4f7f6]">
+        <div className="min-h-screen flex flex-col bg-[#f4f7f6] font-sans">
             <Header user={user} setView={setView} logout={handleSignOut} />
             {view === 'home' && (
-                <div className="flex-grow max-w-7xl mx-auto px-4 py-12">
+                <div className="flex-grow max-w-7xl mx-auto px-4 py-12 w-full">
                    <h1 className="text-4xl font-bold text-center mb-12 text-[#003366]">Upcoming Events</h1>
                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       {events.map((ev: any) => (
-                           <div key={ev.id} className="bg-white p-6 rounded shadow border-l-4 border-[#003366]">
-                               <h3 className="font-bold text-lg">{ev.title}</h3>
-                               <p className="text-sm text-gray-500">{ev.description}</p>
+                       {events.length > 0 ? events.map((ev: any) => (
+                           <div key={ev.id} className="bg-white p-6 rounded-lg shadow-md border-t-4 border-[#003366] hover:shadow-xl transition duration-300">
+                               <div className="flex items-center gap-3 mb-2">
+                                    <Calendar size={18} className="text-[#fcb900]"/>
+                                    <p className="text-sm font-semibold text-gray-600">{new Date(ev.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
+                               </div>
+                               <h3 className="font-extrabold text-xl text-[#003366] mb-2">{ev.title}</h3>
+                               <p className="text-sm text-gray-700 line-clamp-3">{ev.description}</p>
+                               <div className="mt-3 flex justify-between items-center">
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ev.is_paid ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                                        {ev.is_paid ? `₹${ev.fee} Paid` : 'Free'}
+                                    </span>
+                                    {ev.branch && <span className="text-xs text-gray-500 font-medium">Branch: {ev.branch}</span>}
+                               </div>
                            </div>
-                       ))}
+                       )) : (
+                            <div className="md:col-span-3 text-center p-12 bg-white rounded-lg shadow-inner text-gray-500">
+                                No upcoming events scheduled at the moment.
+                            </div>
+                       )}
                    </div>
                 </div>
             )}
