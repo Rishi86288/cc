@@ -4,65 +4,84 @@ import { cors } from 'hono/cors';
 type Bindings = {
   DB: D1Database;
   FILES_BUCKET: R2Bucket;
+  OTP_KV: KVNamespace;
   SUPER_ADMIN_EMAIL: string;
   FACULTY_SECRET_KEY: string;
   EMAILJS_SERVICE_ID: string;
   EMAILJS_TEMPLATE_ID: string;
   EMAILJS_PUBLIC_KEY: string;
   ADMIN_SECRET_KEY: string;
-  OTP_KV: KVNamespace;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
 // Enable CORS for all routes
-app.use('/*', cors());
+app.use('/*', cors({
+  origin: '*', // In production, change this to your pages.dev URL
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Content-Length'],
+  maxAge: 600,
+}));
 
 const uuid = () => crypto.randomUUID();
 
-// --- EMAIL HELPER ---
+// --- HELPER: SEND EMAIL VIA EMAILJS (GMAIL) ---
 async function sendEmail(env: Bindings, toEmail: string, otpCode: string) {
   const url = 'https://api.emailjs.com/api/v1.0/email/send';
   const data = {
     service_id: env.EMAILJS_SERVICE_ID,
     template_id: env.EMAILJS_TEMPLATE_ID,
     user_id: env.EMAILJS_PUBLIC_KEY,
-    template_params: { to_email: toEmail, otp: otpCode }
+    template_params: {
+      to_email: toEmail,
+      otp: otpCode
+    }
   };
+
   try {
-    await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-    return true;
-  } catch { return false; }
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return response.ok;
+  } catch (error) {
+    console.error("Email Error:", error);
+    return false;
+  }
 }
 
-// --- API ROUTES ---
-// We define routes WITHOUT /api prefix because Hono is mounted at the worker root.
-// The manual path replacement in the previous version was error-prone.
-// Hono handles the routing automatically.
+// --- ROUTES ---
+// Note: No /api prefix here because the proxy strips it or forwards to root
 
 // 1. Login
 app.post('/auth/login', async (c) => {
-    const { email, password } = await c.req.json();
-    
-    if (email === c.env.SUPER_ADMIN_EMAIL) {
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        await c.env.OTP_KV.put(email, otp, { expirationTtl: 300 });
-        await sendEmail(c.env, email, otp);
-        return c.json({ status: 'OTP_REQUIRED' });
-    }
+    try {
+        const { email, password } = await c.req.json();
+        
+        if (email === c.env.SUPER_ADMIN_EMAIL) {
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            await c.env.OTP_KV.put(email, otp, { expirationTtl: 300 });
+            await sendEmail(c.env, email, otp);
+            return c.json({ status: 'OTP_REQUIRED' });
+        }
 
-    const user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ? AND password = ?").bind(email, password).first();
-    if (!user) return c.json({ error: "Invalid Credentials" }, 401);
-    return c.json({ status: 'SUCCESS', user });
+        const user = await c.env.DB.prepare("SELECT * FROM users WHERE email = ? AND password = ?").bind(email, password).first();
+        if (!user) return c.json({ error: "Invalid Credentials" }, 401);
+        return c.json({ status: 'SUCCESS', user });
+    } catch (e: any) {
+        return c.json({ error: e.message }, 500);
+    }
 });
 
 // 2. Verify OTP
 app.post('/auth/verify-otp', async (c) => {
     const { email, otp } = await c.req.json();
     const stored = await c.env.OTP_KV.get(email);
+    
     if (stored === otp) {
         await c.env.OTP_KV.delete(email);
-        // Return Super Admin Profile
         return c.json({ status: 'SUCCESS', user: { id: 'super_admin', name: "Super Admin", email, role: "super_admin", branch: "ADMIN" } });
     }
     return c.json({ error: "Invalid OTP" }, 403);
@@ -82,16 +101,16 @@ app.post('/auth/sync', async (c) => {
 
 // 4. Register
 app.post('/auth/register', async (c) => {
-    const { name, email, password, role, branch, phone, secretCode } = await c.req.json();
+    const data = await c.req.json();
     
-    if ((role === 'super_admin' || role === 'event_admin') && secretCode !== c.env.ADMIN_SECRET_KEY) {
+    if ((data.roleType === 'super_admin' || data.roleType === 'event_admin') && data.secretCode !== c.env.ADMIN_SECRET_KEY) {
         return c.json({ error: "Invalid Secret" }, 403);
     }
 
     try {
         const id = uuid();
-        await c.env.DB.prepare("INSERT INTO users (id, name, email, password, role, branch, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, name, email, password, role, branch, phone, Date.now()).run();
-        return c.json({ status: 'SUCCESS', user: { id, name, email, role, branch } });
+        await c.env.DB.prepare("INSERT INTO users (id, name, email, password, role, branch, phone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, data.name, data.email, data.password, data.roleType, data.branch, data.phone || '', Date.now()).run();
+        return c.json({ status: 'SUCCESS', user: { id, ...data } });
     } catch { return c.json({ error: "Email exists" }, 400); }
 });
 
