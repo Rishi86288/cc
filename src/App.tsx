@@ -6,25 +6,13 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// If running on Cloudflare Pages (production), use relative path.
-// If running locally/preview where relative paths fail, use the full worker URL.
-const IS_PROD = window.location.hostname.includes('pages.dev');
-const API_BASE_URL = IS_PROD 
-  ? "/api" 
-  : "https://vite-react-template.rishiforrdp6055.workers.dev/api"; // Fallback to direct worker
+const API_BASE_URL = "/api"; 
 
 // --- ROBUST API HELPER ---
-const fetchJson = async (endpoint: string, options: any = {}) => {
-    // Ensure we construct a valid URL even if API_BASE_URL is relative
-    const url = endpoint.startsWith('http') ? endpoint : `${window.location.origin}${endpoint}`;
-    
-    // If using direct worker fallback, override the URL
-    const finalUrl = API_BASE_URL.startsWith('http') ? `${API_BASE_URL}${endpoint.replace('/api', '')}` : endpoint;
-
+const fetchJson = async (url: string, options: any = {}) => {
     try {
-        const res = await fetch(finalUrl, options);
+        const res = await fetch(url, options);
         const contentType = res.headers.get("content-type");
-        
         if (contentType && contentType.indexOf("application/json") !== -1) {
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || "Server Error");
@@ -42,32 +30,26 @@ const fetchJson = async (endpoint: string, options: any = {}) => {
 
 // --- SERVICE LAYER ---
 const api = {
-    // Auth
-    login: (email, password) => fetchJson(`/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
-    googleLogin: (email, name) => fetchJson(`/auth/google`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, name}) }),
-    verifyOtp: (email, otp) => fetchJson(`/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
-    register: (data) => fetchJson(`/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    
-    // User Features
-    updateProfile: (data) => fetchJson(`/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    requestUpgrade: (id) => fetchJson(`/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
-    
-    // Admin Features
-    getUpgrades: () => fetchJson(`/admin/upgrades`),
-    approveUpgrade: (userId, secret) => fetchJson(`/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
-    
-    // Events & Files
-    getEvents: () => fetchJson(`/events`),
-    createEvent: (fd) => fetchJson(`/events`, { method: 'POST', body: fd }),
-    getFiles: () => fetchJson(`/files`),
+    login: (email, password) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
+    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({uid: crypto.randomUUID(), email, name, branch: 'General'}) }),
+    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
+    register: (data) => fetchJson(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    updateProfile: (data) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    requestUpgrade: (id) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
+    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
+    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+    getEvents: () => fetchJson(`${API_BASE_URL}/events`),
+    createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
+    getFiles: () => fetchJson(`${API_BASE_URL}/files`),
     uploadFile: (file) => {
         const fd = new FormData(); fd.append('file', file);
-        return fetchJson(`/files`, { method: 'PUT', body: fd });
+        return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
     },
-    deleteFile: (name) => fetchJson(`/files/${name}`, { method: 'DELETE' })
+    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' })
 };
 
-// --- COMPONENT: Header ---
+// --- COMPONENTS ---
+
 const Header = ({ user, setView, logout }: any) => (
     <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
@@ -92,31 +74,26 @@ const Header = ({ user, setView, logout }: any) => (
     </div>
 );
 
-// --- COMPONENT: Auth (Login/Register/OTP) ---
 const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
-    const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
     const submit = async (e: any) => { 
         e.preventDefault(); 
-        setError('');
         setLoading(true);
-        try {
-            await onAuth(mode, data);
-        } catch (err: any) {
-            setError(err.message);
-        }
+        await onAuth(mode, data);
         setLoading(false);
     };
     
-    const handleGoogle = () => onAuth('google', { email: 'googleuser@gmail.com', name: 'Google User' });
+    const handleGoogle = () => {
+        const mockUser = { email: 'googleuser@gmail.com', name: 'Google User' };
+        onAuth('google', mockUser);
+    };
 
     return (
         <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify Identity' : (mode==='signup'?'Register':'Portal Login')}</h2>
-                {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
                 {!otpSent && (
                     <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
@@ -156,7 +133,6 @@ const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
     );
 };
 
-// --- COMPONENT: Profile Editor ---
 const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
     const handleSave = async () => {
@@ -179,7 +155,6 @@ const ProfileEditor = ({ user, onUpdate }: any) => {
     );
 };
 
-// --- COMPONENT: Admin Approvals ---
 const AdminApprovals = () => {
     const [reqs, setReqs] = useState<any[]>([]);
     const [secret, setSecret] = useState('');
@@ -216,7 +191,6 @@ const AdminApprovals = () => {
     );
 };
 
-// --- COMPONENT: Dashboard ---
 const Dashboard = ({ user, setUser, logout }: any) => {
     const [activeTab, setActiveTab] = useState('overview');
     const [files, setFiles] = useState([]);
