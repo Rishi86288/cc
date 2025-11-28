@@ -5,21 +5,41 @@ import {
   Menu, Settings, Folder, File, Trash2, Key, CheckCircle, CreditCard, ArrowRight, ShieldAlert, Plus, Edit3
 } from 'lucide-react';
 
+// --- FIREBASE IMPORTS (Client-side Auth) ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+
 // --- CONFIGURATION ---
-// CRITICAL: This must match your Cloudflare Pages Proxy setup
 const API_BASE_URL = "/api"; 
+
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE",
+  authDomain: "savvy-fountain-372005.firebaseapp.com",
+  databaseURL: "https://savvy-fountain-372005-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "savvy-fountain-372005",
+  storageBucket: "savvy-fountain-372005.firebasestorage.app",
+  messagingSenderId: "481989168469",
+  appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
+  measurementId: "G-1RLVVBZ1YM"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 // --- ROBUST API HELPER ---
 const fetchJson = async (url: string, options: any = {}) => {
     try {
         const res = await fetch(url, options);
         const contentType = res.headers.get("content-type");
+        
         if (contentType && contentType.indexOf("application/json") !== -1) {
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || "Server Error");
             return json;
         } else {
-            // If not JSON, it's likely an error page (404/500) or text
             const text = await res.text(); 
             if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
             return {};
@@ -32,20 +52,8 @@ const fetchJson = async (url: string, options: any = {}) => {
 
 // --- SERVICE LAYER ---
 const api = {
-    // Auth
-    login: (email, password) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
-    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({uid: crypto.randomUUID(), email, name, branch: 'General'}) }),
-    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
-    register: (data) => fetchJson(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    
-    // User Features
-    updateProfile: (data) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    requestUpgrade: (id) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
-    
-    // Admin Features
-    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
-    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
-    
+    // Auth (Now using Firebase internally in handleAuth, Worker only does D1 Sync)
+    syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
     // Events & Files
     getEvents: () => fetchJson(`${API_BASE_URL}/events`),
     createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
@@ -83,10 +91,10 @@ const Header = ({ user, setView, logout }: any) => (
     </div>
 );
 
-const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
+const Auth = ({ mode, setView, onAuth }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
-    const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const submit = async (e: any) => { 
         e.preventDefault(); 
@@ -95,69 +103,58 @@ const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
         try {
             await onAuth(mode, data);
         } catch(err: any) {
-            // Check if the error is the 405 Method Not Allowed (which means URL is wrong)
-            if (err.message.includes("405")) {
-                setError("Backend Connection Error. Please check proxy configuration.");
-            } else {
-                setError(err.message || "Authentication Failed");
-            }
+            setError(err.message);
         } finally {
             setLoading(false);
         }
     };
     
-    const handleGoogle = () => {
-        // Simulated Google Login for this example
-        const mockUser = { email: 'googleuser@gmail.com', name: 'Google User' };
-        onAuth('google', mockUser);
-    };
+    const handleGoogle = () => onAuth('google', { email: data.email, name: data.name });
 
     return (
         <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
-                <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify Identity' : (mode==='signup'?'Register':'Portal Login')}</h2>
-                
-                {error && <div className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm border border-red-200">{error}</div>}
+                <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
+                {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
-                {!otpSent && (
-                    <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
-                        <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
-                        {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
-                    </button>
-                )}
+                <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
+                    <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
+                    {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
+                </button>
+
+                <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-300"></div></div>
+                    <div className="relative flex justify-center text-xs uppercase"><span className="px-2 bg-white text-gray-500">Or use email</span></div>
+                </div>
 
                 <form onSubmit={submit} className="space-y-4">
-                    {otpSent ? (
-                        <input className="w-full border p-2 rounded text-center text-2xl tracking-widest" onChange={e => setData({...data, otp: e.target.value})} placeholder="OTP" required />
-                    ) : (
+                    {mode === 'signup' && (
                         <>
-                            {mode === 'signup' && (
-                                <>
-                                    <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={e => setData({...data, name: e.target.value})} required />
-                                    <div className="flex gap-2">
-                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
-                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
-                                    </div>
-                                    {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
-                                        <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
-                                    )}
-                                </>
+                            <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={e => setData({...data, name: e.target.value})} required />
+                            <div className="flex gap-2">
+                                <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
+                                <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
+                            </div>
+                            {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
+                                <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
                             )}
-                            <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={e => setData({...data, email: e.target.value})} required />
-                            <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
                         </>
                     )}
+                    <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={e => setData({...data, email: e.target.value})} required />
+                    <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
+                    
                     <button disabled={loading} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg disabled:opacity-50">
-                        {loading ? 'Processing...' : (otpSent ? 'VERIFY OTP' : 'SUBMIT')}
+                        {loading ? 'Authenticating...' : (mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN')}
                     </button>
                 </form>
-                {!otpSent && <div className="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline" onClick={() => setView(mode==='login'?'signup':'login')}>{mode==='login'?'Create Account':'Back to Login'}</div>}
+                <div className="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline" onClick={() => setView(mode==='login'?'signup':'login')}>
+                    {mode==='login'?'Create Account':'Back to Login'}
+                </div>
             </div>
         </div>
     );
 };
 
-// --- COMPONENT: Profile Editor ---
 const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
     const handleSave = async () => {
@@ -244,6 +241,13 @@ const Dashboard = ({ user, setUser, logout }: any) => {
          } catch (e: any) { alert(e.message); }
     };
 
+    const handleDeleteFile = async (name: string) => {
+        if(confirm("Delete file?")) {
+            await api.deleteFile(name);
+            api.getFiles().then(setFiles);
+        }
+    };
+
     return (
         <div className="max-w-7xl mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 min-h-[60vh]">
             <div className="w-full md:w-64 bg-white rounded shadow h-fit pb-4 border border-gray-200">
@@ -271,7 +275,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
             </div>
 
             <div className="flex-1">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab === 'profile' ? 'Edit Profile' : 'Dashboard'}</h2>
+                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
 
                 {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} />}
                 
@@ -319,7 +323,7 @@ const Dashboard = ({ user, setUser, logout }: any) => {
                             <label className="bg-[#003366] text-white px-3 py-1 rounded text-xs cursor-pointer flex gap-1 items-center"><Upload size={14}/> Upload <input type="file" className="hidden" onChange={handleUpload}/></label>
                         </div>
                         {files.map((f:any, i:number) => (
-                            <div key={i} className="p-3 border-b text-sm flex justify-between"><span className="flex gap-2"><FileText size={16}/> {f.name}</span><span className="text-gray-500">{f.size}</span></div>
+                            <div key={i} className="p-3 border-b text-sm flex justify-between"><span className="flex gap-2"><FileText size={16}/> {f.name}</span><div className="flex items-center gap-4"><span className="text-gray-500">{f.size}</span><button onClick={() => handleDeleteFile(f.name)} className="text-red-500 hover:text-red-700"><Trash2 size={16}/></button></div></div>
                         ))}
                     </div>
                 )}
