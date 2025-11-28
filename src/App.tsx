@@ -76,29 +76,41 @@ const api = {
 };
 
 // --- COMPONENTS (Omitted for brevity, logic remains the same) ---
-const Header = ({ user, setView, logout }: any) => (
-    <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('home')}>
-                <div className="w-10 h-10 bg-[#003366] text-white flex items-center justify-center font-bold text-xl rounded shadow-sm">C</div>
-                <div><h1 className="text-xl font-extrabold text-[#003366] leading-none uppercase">CIPET : IPT</h1><p className="text-xs text-gray-600">Ahmedabad</p></div>
-            </div>
-            <div className="flex items-center gap-4 text-sm font-bold text-gray-700">
-                <button onClick={() => setView('home')} className="hover:text-[#fcb900] transition">HOME</button>
-                {user ? (
-                    <div className="flex items-center gap-3 pl-4 border-l">
-                        <div className="text-right hidden sm:block">
-                            <p className="text-[#003366]">{user.name}</p>
-                            <p className="text-[10px] text-gray-500 uppercase">{user.role}</p>
+const Header = ({ user, setView, logout }: any) => {
+    
+    // Function to determine the correct dashboard view name based on role
+    const getDashboardViewName = (role: string) => {
+        if (role === 'student') return 'student_dashboard';
+        if (role === 'event_admin') return 'admin_dashboard';
+        if (role === 'super_admin') return 'super_admin_dashboard';
+        return 'home'; // Fallback
+    };
+    
+    return (
+        <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+                <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('home')}>
+                    <div className="w-10 h-10 bg-[#003366] text-white flex items-center justify-center font-bold text-xl rounded shadow-sm">C</div>
+                    <div><h1 className="text-xl font-extrabold text-[#003366] leading-none uppercase">CIPET : IPT</h1><p className="text-xs text-gray-600">Ahmedabad</p></div>
+                </div>
+                <div className="flex items-center gap-4 text-sm font-bold text-gray-700">
+                    <button onClick={() => setView('home')} className="hover:text-[#fcb900] transition">HOME</button>
+                    {user ? (
+                        <div className="flex items-center gap-3 pl-4 border-l">
+                            <div className="text-right hidden sm:block">
+                                <p className="text-[#003366]">{user.name}</p>
+                                <p className="text-[10px] text-gray-500 uppercase">{user.role}</p>
+                            </div>
+                            {/* Use the role-specific view name here */}
+                            <button onClick={() => setView(getDashboardViewName(user.role))} className="bg-[#003366] text-white px-3 py-1 rounded">DASHBOARD</button>
+                            <button onClick={logout} className="text-red-500 hover:text-red-700"><LogOut size={18}/></button>
                         </div>
-                        <button onClick={() => setView('dashboard')} className="bg-[#003366] text-white px-3 py-1 rounded">DASHBOARD</button>
-                        <button onClick={logout} className="text-red-500 hover:text-red-700"><LogOut size={18}/></button>
-                    </div>
-                ) : <button onClick={() => setView('login')} className="text-[#003366]">LOGIN</button>}
+                    ) : <button onClick={() => setView('login')} className="text-[#003366]">LOGIN</button>}
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 const Auth = ({ mode, setView, onAuth }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '' });
@@ -543,6 +555,14 @@ const App = () => {
     // Use memoized values for ease of access and dependency tracking
     const authInstance = firebaseServices.auth;
     const googleProvider = firebaseServices.provider;
+    
+    // Helper to determine the correct view based on the user's role
+    const getRoleBasedView = (role: string) => {
+        if (role === 'student') return 'student_dashboard';
+        if (role === 'event_admin') return 'admin_dashboard';
+        if (role === 'super_admin') return 'super_admin_dashboard';
+        return 'home';
+    };
 
     const handleAuth = async (mode: string, data: any) => {
         if (!isConfigured) {
@@ -595,7 +615,8 @@ const App = () => {
                     const otpRes = await api.verifyOtp(data.email, otp);
                     if(otpRes.status === 'SUCCESS' && otpRes.user) { 
                         setUser(otpRes.user); 
-                        setView('dashboard'); // <-- REDIRECT AFTER OTP SUCCESS
+                        // REDIRECT BASED ON ROLE AFTER OTP SUCCESS
+                        setView(getRoleBasedView(otpRes.user.role)); 
                     }
                     else {
                         window.alert(otpRes.error || "OTP verification failed.");
@@ -607,7 +628,8 @@ const App = () => {
                 }
             } else if (res.user) { 
                 setUser(res.user); 
-                setView('dashboard'); // <-- REDIRECT AFTER NORMAL SIGN IN/SIGN UP SUCCESS
+                // REDIRECT BASED ON ROLE AFTER NORMAL SIGN IN/SIGN UP SUCCESS
+                setView(getRoleBasedView(res.user.role)); 
             } else {
                 throw new Error("Unknown authentication flow error.");
             }
@@ -646,6 +668,9 @@ const App = () => {
         );
     }
 
+    // Determine if the current view is one of the role-based dashboards
+    const isDashboardView = ['student_dashboard', 'admin_dashboard', 'super_admin_dashboard'].includes(view);
+
     return (
         <div className="min-h-screen flex flex-col bg-[#f4f7f6] font-sans">
             <Header user={user} setView={setView} logout={handleSignOut} />
@@ -678,7 +703,8 @@ const App = () => {
             )}
             {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
             {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
-            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
+            {/* RENDER DASHBOARD FOR ALL ROLE-BASED VIEWS */}
+            {isDashboardView && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
     );
