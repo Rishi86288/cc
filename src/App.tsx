@@ -22,20 +22,21 @@ import {
 // --- CONFIGURATION ---
 const API_BASE_URL = "/api"; // Proxy to Worker
 
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// ** FIX: INCORPORATING USER'S PROVIDED FIREBASE CONFIG **
 const firebaseConfig = {
-  apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE",
+  apiKey: "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE", 
   authDomain: "savvy-fountain-372005.firebaseapp.com",
   databaseURL: "https://savvy-fountain-372005-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "savvy-fountain-372005",
   storageBucket: "savvy-fountain-372005.firebasestorage.app",
   messagingSenderId: "481989168469",
-  appId: "1:481989168469:web:1811072ec0ee37fecc33dc"
+  appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
+  measurementId: "G-1RLVVBZ1YM" // Added user's measurementId
 };
 
-// Check if configuration has been updated from the placeholder text
-const PLACEHOLDER_KEY = "AIzaSyB97HQe_RVoR7L8qYah8fAsNOho5YijIWE";
-const isConfigured = !firebaseConfig.apiKey.includes(PLACEHOLDER_KEY);
+// ** FIX: Simplified check to prevent perpetual error message **
+// We now only check if the API key field is non-empty.
+const isConfigured = !!firebaseConfig.apiKey;
 
 // Initialize Firebase services
 let authInstance: Auth | null = null;
@@ -153,8 +154,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
             <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
                 <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{mode==='signup'?'Register Account':'Portal Login'}</h2>
                 
-                {/* Configuration Error Message - Hidden now that keys are updated */}
-                {!isConfigured && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">ERROR: Please update 'firebaseConfig' in src/App.tsx.</div>}
+                {/* Configuration Error Message - REMOVED the explicit check so the app now proceeds with the user's config */}
                 {error && <div className="bg-red-100 text-red-700 p-2 mb-4 text-sm rounded border border-red-200">{error}</div>}
 
                 <button type="button" onClick={handleGoogle} disabled={!isConfigured} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm disabled:opacity-50">
@@ -544,8 +544,13 @@ const App = () => {
     }, []);
 
     const handleAuth = async (mode: string, data: any) => {
-        if (!isConfigured || !authInstance || !googleProvider) {
-             throw new Error("Configuration Error: Firebase not initialized.");
+        // Check for configuration error explicitly here before proceeding
+        if (!isConfigured) {
+             throw new Error("Configuration Error: Please update 'firebaseConfig' in src/App.tsx.");
+        }
+        
+        if (!authInstance || !googleProvider) {
+             throw new Error("Initialization Error: Firebase SDK not available.");
         }
 
         try {
