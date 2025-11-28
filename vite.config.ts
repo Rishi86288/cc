@@ -5,7 +5,7 @@ import { resolve } from "path";
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: "./", // Ensures assets load correctly on Cloudflare Pages
+  base: "./", 
   resolve: {
     alias: {
       "@": resolve(__dirname, "./src"),
