@@ -18,8 +18,7 @@ export default defineConfig({
     rollupOptions: {
         external: [
             /^firebase\/.*/, // Exclude all firebase subpackages
-            'firebase/app',
-            'firebase/auth'
+          
         ]
     }
   }
