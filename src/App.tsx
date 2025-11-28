@@ -1,374 +1,358 @@
 import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
 import { 
-  Calendar, Users, FileText, Upload, LogOut, ChevronRight, 
-  Bell, MapPin, Phone, Mail, Lock, LayoutDashboard, UserCircle, 
-  Menu, Settings, Folder, File, Trash2, Key, CheckCircle, CreditCard, ArrowRight, ShieldAlert, Plus, Edit3
+  getAuth, signInWithPopup, GoogleAuthProvider, signOut, 
+  onAuthStateChanged, createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, updateProfile 
+} from 'firebase/auth';
+import { 
+  School, Calendar, Users, LogOut, PlusCircle, Trash2, 
+  CreditCard, CheckCircle, Menu, X, Upload, FileText, 
+  Download, Lock, Folder, LayoutDashboard, ChevronRight,
+  Phone, Mail, Globe, Search, Bell, Home, ChevronDown,
+  Eye, DollarSign, Printer, Shield, Key
 } from 'lucide-react';
 
-// --- CONFIGURATION ---
-const API_BASE_URL = "/api"; // Cloudflare Pages Proxy
-
-// --- ROBUST API HELPER ---
-const fetchJson = async (url: string, options: any = {}) => {
-    try {
-        const res = await fetch(url, options);
-        const contentType = res.headers.get("content-type");
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-            const json = await res.json();
-            if (!res.ok) throw new Error(json.error || "Server Error");
-            return json;
-        } else {
-            const text = await res.text(); 
-            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
-            return {};
-        }
-    } catch (err: any) {
-        console.error("API Error:", err);
-        throw err;
-    }
+const CONFIG = {
+  name: "CENTRAL INSTITUTE OF PETROCHEMICALS ENGINEERING & TECHNOLOGY",
+  campus: "CIPET : IPT - AHMEDABAD",
+  ministry: "Department of Chemicals & Petrochemicals, Ministry of Chemicals & Fertilizers, Govt. of India",
+  contact: "+91-79-40103903",
+  email: "ahmedabad@cipet.gov.in",
+  branches: ["STC", "PGT-PPT", "DIPLOMA", "BE", "ME", "MSC", "OTHER"],
+  currency: "₹"
 };
 
-// --- SERVICE LAYER (Fixed Paths) ---
-const api = {
-    // Auth
-    login: (email, password) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, password}) }),
-    googleLogin: (email, name) => fetchJson(`${API_BASE_URL}/auth/google`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, name}) }),
-    verifyOtp: (email, otp) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, otp}) }),
-    register: (data) => fetchJson(`${API_BASE_URL}/auth/register`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    
-    // User Features
-    updateProfile: (data) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
-    requestUpgrade: (id) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
-    
-    // Admin Features
-    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
-    approveUpgrade: (userId, secret) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
-    
-    // Events & Files
-    getEvents: () => fetchJson(`${API_BASE_URL}/events`),
-    createEvent: (fd) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
-    getFiles: () => fetchJson(`${API_BASE_URL}/files`),
-    uploadFile: (file) => {
-        const fd = new FormData(); fd.append('file', file);
-        return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
-    },
-    deleteFile: (name) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' })
+// --- API SIMULATION LAYER ---
+const api = async (endpoint: string, method='GET', body?:any) => {
+  // Simulate Network Delay
+  await new Promise(r => setTimeout(r, 600));
+
+  // DATA STORE (Browser Storage)
+  const get = (k:string) => JSON.parse(localStorage.getItem(k)||'[]');
+  const set = (k:string,v:any) => localStorage.setItem(k, JSON.stringify(v));
+
+  // --- MOCK LOGIC ---
+  if(endpoint === '/events' && method === 'GET') return get('c_ev').sort((a:any,b:any)=>new Date(b.date).getTime()-new Date(a.date).getTime());
+  if(endpoint === '/events' && method === 'POST') { const n={...body, id:crypto.randomUUID(), created_at:Date.now()}; set('c_ev',[n,...get('c_ev')]); return n; }
+  if(endpoint.includes('/reports/')) return get('c_reg').filter((r:any) => r.eventId === endpoint.split('/').pop());
+  if(endpoint === '/register') { set('c_reg', [...get('c_reg'), {...body, id:crypto.randomUUID()}]); return {success:true}; }
+  
+  // --- ADMIN SECURITY MOCK ---
+  if(endpoint === '/admin/request-otp') {
+    // In real app, this sends email. Here, we simulate it.
+    if(body.key === 'CIPET_ADMIN') return { success: true, debug_otp: '123456' }; 
+    return { error: 'Invalid Faculty Key' };
+  }
+  if(endpoint === '/admin/verify-otp') {
+    return body.code === '123456' ? { success: true } : { error: 'Invalid OTP' };
+  }
+
+  return null;
 };
+
+// --- FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 // --- COMPONENTS ---
 
-const Header = ({ user, setView, logout }: any) => (
-    <div className="bg-white shadow-sm border-b-4 border-[#fcb900] sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('home')}>
-                <div className="w-10 h-10 bg-[#003366] text-white flex items-center justify-center font-bold text-xl rounded shadow-sm">C</div>
-                <div><h1 className="text-xl font-extrabold text-[#003366] leading-none uppercase">CIPET : IPT</h1><p className="text-xs text-gray-600">Ahmedabad</p></div>
-            </div>
-            <div className="flex items-center gap-4 text-sm font-bold text-gray-700">
-                <button onClick={() => setView('home')} className="hover:text-[#fcb900] transition">HOME</button>
-                {user ? (
-                    <div className="flex items-center gap-3 pl-4 border-l">
-                        <div className="text-right hidden sm:block">
-                            <p className="text-[#003366]">{user.name}</p>
-                            <p className="text-[10px] text-gray-500 uppercase">{user.role}</p>
-                        </div>
-                        <button onClick={() => setView('dashboard')} className="bg-[#003366] text-white px-3 py-1 rounded">DASHBOARD</button>
-                        <button onClick={logout} className="text-red-500"><LogOut size={18}/></button>
-                    </div>
-                ) : <button onClick={() => setView('login')} className="text-[#003366]">LOGIN</button>}
-            </div>
-        </div>
+const Header = ({ setPage }: any) => (
+  <>
+    <div className="bg-[#2c3e50] text-white text-[11px] py-1 px-4 hidden md:flex justify-between items-center">
+      <div className="flex gap-4 opacity-90 tracking-wide"><span>GOVERNMENT OF INDIA</span><span>MINISTRY OF CHEMICALS & FERTILIZERS</span></div>
+      <div className="flex gap-4">
+        <span className="flex items-center gap-1 hover:text-yellow-400 cursor-pointer"><Phone className="w-3 h-3"/> {CONFIG.contact}</span>
+        <span className="flex items-center gap-1 hover:text-yellow-400 cursor-pointer"><Mail className="w-3 h-3"/> {CONFIG.email}</span>
+      </div>
     </div>
+    <div className="bg-white py-3 px-4 border-b-4 border-[#f39c12] shadow-sm">
+      <div className="max-w-7xl mx-auto flex justify-between items-center">
+        <div className="flex items-center gap-4 cursor-pointer" onClick={() => setPage('home')}>
+          <div className="w-16 h-16 bg-white border border-gray-200 flex items-center justify-center rounded"><School className="w-10 h-10 text-[#005b9f]" /></div>
+          <div className="hidden md:block">
+            <h2 className="text-[#005b9f] font-bold text-sm tracking-wide">{CONFIG.name}</h2>
+            <h1 className="text-[#d35400] font-bold text-2xl">{CONFIG.campus}</h1>
+          </div>
+        </div>
+        <div className="flex gap-3 text-[9px] font-bold text-center">
+           <div className="h-12 w-12 bg-gray-100 rounded-full border flex items-center justify-center">Emblem</div>
+           <div className="h-12 w-12 bg-gray-100 rounded-full border flex items-center justify-center">Swachh</div>
+        </div>
+      </div>
+    </div>
+  </>
 );
 
-const Auth = ({ mode, setView, onAuth, otpSent }: any) => {
-    const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '', otp: '' });
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    const submit = async (e: any) => { 
-        e.preventDefault(); 
-        setLoading(true);
-        setError('');
-        try {
-            await onAuth(mode, data);
-        } catch(err: any) {
-            setError(err.message);
-        }
-        setLoading(false);
-    };
-    
-    const handleGoogle = () => onAuth('google', { email: 'googleuser@gmail.com', name: 'Google User' });
-
-    return (
-        <div className="min-h-[70vh] flex items-center justify-center bg-gray-50 p-4">
-            <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md border-t-4 border-[#003366]">
-                <h2 className="text-2xl font-bold text-[#003366] text-center mb-6">{otpSent ? 'Verify Identity' : (mode==='signup'?'Register':'Portal Login')}</h2>
-                
-                {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4 text-sm">{error}</div>}
-
-                {!otpSent && (
-                    <button type="button" onClick={handleGoogle} className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 py-2.5 rounded-lg mb-6 hover:bg-gray-50 font-bold text-gray-700 text-sm shadow-sm">
-                        <span className="w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs">G</span> 
-                        {mode==='signup' ? 'Sign up with Google' : 'Sign in with Google'}
-                    </button>
-                )}
-
-                <form onSubmit={submit} className="space-y-4">
-                    {otpSent ? (
-                        <input className="w-full border p-2 rounded text-center text-2xl tracking-widest" onChange={e => setData({...data, otp: e.target.value})} placeholder="OTP" required />
-                    ) : (
-                        <>
-                            {mode === 'signup' && (
-                                <>
-                                    <input className="w-full border p-2 rounded" placeholder="Full Name" onChange={e => setData({...data, name: e.target.value})} required />
-                                    <div className="flex gap-2">
-                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
-                                        <select className="w-full border p-2 rounded bg-white" onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
-                                    </div>
-                                    {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
-                                        <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
-                                    )}
-                                </>
-                            )}
-                            <input className="w-full border p-2 rounded" type="email" placeholder="Email Address" onChange={e => setData({...data, email: e.target.value})} required />
-                            <input className="w-full border p-2 rounded" type="password" placeholder="Password" onChange={e => setData({...data, password: e.target.value})} required />
-                        </>
-                    )}
-                    <button disabled={loading} className="w-full bg-[#003366] text-white py-2.5 rounded font-bold hover:bg-blue-900 transition shadow-lg disabled:opacity-50">
-                        {loading ? 'Processing...' : (otpSent ? 'VERIFY OTP' : 'SUBMIT')}
-                    </button>
-                </form>
-                {!otpSent && <div className="mt-4 text-center text-sm text-blue-600 cursor-pointer hover:underline" onClick={() => setView(mode==='login'?'signup':'login')}>{mode==='login'?'Create Account':'Back to Login'}</div>}
-            </div>
-        </div>
-    );
+const Navbar = ({ setPage, active }: any) => {
+  const btn = (id: string, label: string) => (
+    <button onClick={() => setPage(id)} className={`px-5 py-3 text-sm font-bold border-r border-[#004a80] hover:bg-[#004a80] transition-colors ${active===id ? 'bg-[#d35400] border-[#d35400]' : ''}`}>{label}</button>
+  );
+  return (
+    <div className="bg-[#005b9f] text-white sticky top-0 z-40 shadow-xl overflow-x-auto">
+      <div className="max-w-7xl mx-auto flex whitespace-nowrap">
+        {btn('home', 'HOME')}{btn('about', 'ABOUT US')}{btn('academics', 'ACADEMICS')}{btn('notices', 'NOTICES & TENDERS')}{btn('student', 'STUDENT CORNER')}{btn('contact', 'CONTACT')}
+      </div>
+    </div>
+  );
 };
 
-const ProfileEditor = ({ user, onUpdate }: any) => {
-    const [data, setData] = useState({ ...user });
-    const handleSave = async () => {
-        try {
-            await api.updateProfile(data);
-            onUpdate(data);
-            alert('Profile Updated!');
-        } catch(e: any) { alert(e.message); }
-    };
-    return (
-        <div className="bg-white p-6 rounded shadow border">
-            <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><UserCircle/> Edit Profile</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div><label className="text-xs font-bold text-gray-500">Name</label><input className="w-full border p-2 rounded" value={data.name} onChange={e => setData({...data, name: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500">Phone</label><input className="w-full border p-2 rounded" value={data.phone || ''} onChange={e => setData({...data, phone: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500">Branch</label><select className="w-full border p-2 rounded" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select></div>
-            </div>
-            <button onClick={handleSave} className="bg-[#003366] text-white px-4 py-2 rounded text-sm font-bold">Save Changes</button>
+// --- AUTH MODAL ---
+const AuthModal = ({ onClose, onSuccess }: any) => {
+  const [isLogin, setIsLogin] = useState(true);
+  const [form, setForm] = useState({ email: '', pass: '', name: '' });
+  const [error, setError] = useState('');
+
+  const handleAuth = async (e:any) => {
+    e.preventDefault(); setError('');
+    try {
+      if(isLogin) await signInWithEmailAndPassword(auth, form.email, form.pass);
+      else { const res = await createUserWithEmailAndPassword(auth, form.email, form.pass); await updateProfile(res.user, { displayName: form.name }); }
+      onSuccess();
+    } catch(e:any) { setError(e.message); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100] p-4 backdrop-blur-sm">
+      <div className="bg-white w-full max-w-md rounded shadow-lg overflow-hidden">
+        <div className="flex border-b text-sm font-bold">
+          <button onClick={()=>setIsLogin(true)} className={`flex-1 py-3 ${isLogin?'bg-[#005b9f] text-white':'bg-gray-50'}`}>LOGIN</button>
+          <button onClick={()=>setIsLogin(false)} className={`flex-1 py-3 ${!isLogin?'bg-[#005b9f] text-white':'bg-gray-50'}`}>REGISTER</button>
         </div>
-    );
+        <div className="p-6">
+          <button onClick={() => signInWithPopup(auth, googleProvider).then(onSuccess)} className="w-full border py-2 rounded flex items-center justify-center gap-2 mb-4 hover:bg-gray-50 text-sm font-bold text-gray-700"><Globe className="w-4 h-4 text-blue-600"/> Google Login</button>
+          <div className="relative text-center mb-4"><span className="bg-white px-2 text-xs text-gray-400 relative z-10">OR EMAIL</span><div className="absolute inset-0 flex items-center"><div className="w-full border-t"></div></div></div>
+          <form onSubmit={handleAuth} className="space-y-3">
+            {!isLogin && <input required placeholder="Full Name" className="w-full border p-2 rounded text-sm" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/>}
+            <input required type="email" placeholder="Email" className="w-full border p-2 rounded text-sm" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/>
+            <input required type="password" placeholder="Password" className="w-full border p-2 rounded text-sm" value={form.pass} onChange={e=>setForm({...form,pass:e.target.value})}/>
+            {error && <div className="text-red-500 text-xs">{error}</div>}
+            <button className="w-full bg-[#d35400] text-white font-bold py-2 rounded shadow hover:bg-[#a04000]">{isLogin?'Enter Portal':'Create Account'}</button>
+          </form>
+          <button onClick={onClose} className="mt-4 w-full text-xs text-gray-400 hover:underline">Close</button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
-const AdminApprovals = () => {
-    const [reqs, setReqs] = useState<any[]>([]);
-    const [secret, setSecret] = useState('');
+// --- ADMIN DASHBOARD ---
+const AdminDashboard = ({ events, setEvents }: any) => {
+  const [view, setView] = useState('publish');
+  const [form, setForm] = useState({ title: '', desc: '', date: '', type: 'Notice', price: 0 });
+  const [reports, setReports] = useState<any[]>([]);
+  const [selectedEv, setSelectedEv] = useState<any>(null);
 
-    useEffect(() => { api.getUpgrades().then(data => { if(Array.isArray(data)) setReqs(data); }); }, []);
+  const publish = async () => {
+    if(!form.title) return alert("Title Required");
+    const ev = await api('/events', 'POST', form);
+    setEvents([ev, ...events]);
+    alert("Published!");
+    setForm({ title: '', desc: '', date: '', type: 'Notice', price: 0 });
+  };
 
-    const handleApprove = async (id: number) => {
-        try {
-            await api.approveUpgrade(id, secret);
-            alert("User Upgraded!"); 
-            api.getUpgrades().then(setReqs);
-        } catch(e: any) { alert(e.message); }
-    };
+  const loadReport = async (ev:any) => {
+    setSelectedEv(ev);
+    const data = await api(`/reports/${ev.id}`);
+    setReports(data);
+    setView('detail');
+  };
 
-    return (
-        <div className="bg-white p-6 rounded shadow border">
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-lg flex items-center gap-2"><ShieldAlert className="text-red-500"/> Pending Requests</h3>
-                <input type="password" placeholder="Admin Secret Key" className="border p-2 rounded text-xs w-48" onChange={e => setSecret(e.target.value)} />
+  return (
+    <div className="bg-white border rounded shadow min-h-[500px] flex flex-col">
+      <div className="flex border-b bg-gray-50 font-bold text-sm">
+        <button onClick={()=>setView('publish')} className={`px-6 py-3 border-r ${view==='publish'?'bg-[#005b9f] text-white':''}`}>Publish</button>
+        <button onClick={()=>setView('reports')} className={`px-6 py-3 border-r ${view.includes('report')?'bg-[#005b9f] text-white':''}`}>Reports</button>
+      </div>
+      <div className="p-6 flex-1 overflow-y-auto">
+        {view === 'publish' && (
+          <div className="max-w-xl space-y-4">
+            <h3 className="text-[#005b9f] font-bold border-b pb-2">New Circular / Event</h3>
+            <input className="w-full border p-2 rounded text-sm" placeholder="Subject / Title" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/>
+            <div className="grid grid-cols-2 gap-4">
+              <select className="border p-2 rounded text-sm" value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>{['Notice','Event','Workshop','Tender'].map(t=><option key={t}>{t}</option>)}</select>
+              <input type="number" className="border p-2 rounded text-sm" placeholder="Fee (₹)" value={form.price} onChange={e=>setForm({...form,price:Number(e.target.value)})}/>
             </div>
-            <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Action</th></tr></thead>
-                <tbody>
-                    {reqs.map((u: any) => (
-                        <tr key={u.id} className="border-b">
-                            <td className="p-2">{u.name}</td><td className="p-2">{u.email}</td>
-                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold">Approve</button></td>
-                        </tr>
-                    ))}
-                    {reqs.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-gray-400">No pending requests.</td></tr>}
-                </tbody>
-            </table>
-        </div>
-    );
-};
-
-const Dashboard = ({ user, setUser, logout }: any) => {
-    const [activeTab, setActiveTab] = useState('overview');
-    const [files, setFiles] = useState([]);
-    const [showCreate, setShowCreate] = useState(false);
-
-    useEffect(() => { if(activeTab === 'files') api.getFiles().then(setFiles); }, [activeTab]);
-
-    const handleCreate = async (e: any) => {
-        e.preventDefault();
-        const fd = new FormData(e.target);
-        fd.append('isPaid', e.target.isPaid.checked);
-        fd.append('userEmail', user.email);
-        await api.createEvent(fd);
-        alert("Event Posted!");
-        setShowCreate(false);
-    };
-
-    const handleUpload = async (e: any) => {
-        if(e.target.files[0]) { await api.uploadFile(e.target.files[0]); api.getFiles().then(setFiles); }
-    };
-
-    const handleUpgrade = async () => {
-         try {
-            await api.requestUpgrade(user.id);
-            alert("Upgrade Request Sent!");
-         } catch (e: any) { alert(e.message); }
-    };
-
-    return (
-        <div className="max-w-7xl mx-auto px-4 py-8 flex flex-col md:flex-row gap-8 min-h-[60vh]">
-            <div className="w-full md:w-64 bg-white rounded shadow h-fit pb-4 border border-gray-200">
-                <div className="p-6 bg-[#003366] text-center text-white mb-2">
-                    <div className="w-16 h-16 bg-white text-[#003366] rounded-full mx-auto flex items-center justify-center font-bold text-2xl mb-2">{user.name[0]}</div>
-                    <h3 className="font-bold truncate">{user.name}</h3>
-                    <p className="text-xs uppercase opacity-75">{user.role}</p>
-                </div>
-                <nav className="px-2 space-y-1">
-                    <button onClick={() => setActiveTab('overview')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='overview'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><LayoutDashboard size={16}/> Overview</button>
-                    <button onClick={() => setActiveTab('profile')} className={`w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 ${activeTab==='profile'?'bg-blue-50 text-[#003366]':'text-gray-600 hover:bg-gray-100'}`}><UserCircle size={16}/> Profile</button>
-                    
-                    {(user.role === 'super_admin' || user.role === 'event_admin') && (
-                        <button onClick={() => setActiveTab('events')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Calendar size={16}/> Manage Events</button>
-                    )}
-                    
-                    {user.role === 'super_admin' && (
-                        <>
-                            <button onClick={() => setActiveTab('files')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100"><Folder size={16}/> File Manager</button>
-                            <button onClick={() => setActiveTab('approvals')} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 hover:bg-gray-100 text-red-600"><ShieldAlert size={16}/> Approvals</button>
-                        </>
-                    )}
-                    <button onClick={logout} className="w-full text-left px-4 py-2 rounded text-sm font-semibold flex gap-2 text-red-600 hover:bg-red-50"><LogOut size={16}/> Sign Out</button>
-                </nav>
-            </div>
-
-            <div className="flex-1">
-                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab === 'profile' ? 'Edit Profile' : 'Dashboard'}</h2>
-
-                {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} />}
-                
-                {activeTab === 'overview' && (
-                    <div className="space-y-6">
-                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-white p-6 rounded shadow border-l-4 border-[#003366]"><p className="text-xs font-bold text-gray-500 uppercase">Status</p><p className="text-2xl font-bold text-[#003366]">Active</p></div>
-                        </div>
-                        {user.role === 'student' && (
-                            <div className="bg-white p-6 rounded shadow border border-blue-100 flex justify-between items-center">
-                                <div><h3 className="font-bold text-[#003366]">Become Event Admin</h3><p className="text-sm text-gray-600">Organize workshops and manage registrations.</p></div>
-                                {user.upgrade_status === 'pending' ? <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm font-bold">Pending</span> : <button onClick={handleUpgrade} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold shadow hover:bg-yellow-400">Request Upgrade</button>}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals />}
-
-                {activeTab === 'events' && (
-                    <div>
-                        <button onClick={() => setShowCreate(!showCreate)} className="bg-[#fcb900] text-[#003366] px-4 py-2 rounded font-bold mb-4 flex gap-2 items-center"><Plus size={16}/> New Event</button>
-                        {showCreate && (
-                            <div className="bg-white p-6 rounded shadow border mb-6">
-                                <h3 className="font-bold mb-4">Post Event</h3>
-                                <form onSubmit={handleCreate} className="space-y-4">
-                                    <input name="title" className="w-full border p-2 rounded" placeholder="Title" required />
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <input name="date" type="date" className="w-full border p-2 rounded" required />
-                                        <input name="fee" type="number" className="w-full border p-2 rounded" placeholder="Fee (₹)" />
-                                    </div>
-                                    <textarea name="desc" className="w-full border p-2 rounded" placeholder="Description..."></textarea>
-                                    <div className="flex gap-4 items-center"><label className="flex gap-2 text-sm"><input type="checkbox" name="isPaid" /> Paid?</label><input type="file" name="attachment" className="text-xs"/></div>
-                                    <button className="bg-[#003366] text-white px-4 py-2 rounded font-bold">Publish Event</button>
-                                </form>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {activeTab === 'files' && (
-                    <div className="bg-white rounded shadow overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-                            <h3 className="font-bold">Cloud Files</h3>
-                            <label className="bg-[#003366] text-white px-3 py-1 rounded text-xs cursor-pointer flex gap-1 items-center"><Upload size={14}/> Upload <input type="file" className="hidden" onChange={handleUpload}/></label>
-                        </div>
-                        {files.map((f:any, i:number) => (
-                            <div key={i} className="p-3 border-b text-sm flex justify-between"><span className="flex gap-2"><FileText size={16}/> {f.name}</span><span className="text-gray-500">{f.size}</span></div>
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
+            <input type="date" className="w-full border p-2 rounded text-sm" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
+            <button onClick={publish} className="w-full bg-[#005b9f] text-white py-2 rounded font-bold">Publish to Website</button>
+          </div>
+        )}
+        {view === 'reports' && (
+          <div className="space-y-2">
+            <h3 className="text-gray-700 font-bold mb-4">Select Event</h3>
+            {events.map((e:any) => (
+              <div key={e.id} className="flex justify-between p-3 border rounded hover:bg-gray-50 items-center">
+                <span className="text-sm font-bold text-[#005b9f]">{e.title}</span>
+                <button onClick={()=>loadReport(e)} className="bg-green-600 text-white text-xs px-3 py-1 rounded font-bold">View Data</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {view === 'detail' && (
+          <div>
+            <button onClick={()=>setView('reports')} className="text-xs text-blue-600 hover:underline mb-4">← Back</button>
+            <h3 className="font-bold text-lg mb-4">{selectedEv.title}</h3>
+            <table className="w-full text-xs text-left border"><thead className="bg-gray-100 font-bold"><tr><th className="p-2">Name</th><th className="p-2">Status</th><th className="p-2">Amount</th></tr></thead><tbody>{reports.map((r:any) => (<tr key={r.id} className="border-b"><td className="p-2">{r.userName}</td><td className="p-2">{r.status}</td><td className="p-2">{r.amount}</td></tr>))}</tbody></table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 // --- MAIN APP ---
-const App = () => {
-    const [view, setView] = useState('home');
-    const [user, setUser] = useState<any>(null);
-    const [events, setEvents] = useState<any[]>([]);
+export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [role, setRole] = useState('student');
+  const [page, setPage] = useState('home');
+  const [events, setEvents] = useState<any[]>([]);
+  const [modals, setModals] = useState({ auth: false, verify: false, pay: null as any });
 
-    useEffect(() => { 
-        api.getEvents().then(data => { if(Array.isArray(data)) setEvents(data); }).catch(e => console.error(e)); 
-    }, []);
+  useEffect(() => {
+    api('/events').then(setEvents);
+    return onAuthStateChanged(auth, u => {
+      setUser(u);
+      if(u) setRole(localStorage.getItem(`role_${u.uid}`) || 'student');
+    });
+  }, []);
 
-    const handleAuth = async (mode: string, data: any) => {
-        try {
-            let res;
-            if (mode === 'google') res = await api.googleLogin(data.email, data.name);
-            else if (mode === 'login') res = await api.login(data.email, data.password);
-            else res = await api.register(data);
+  const handleRegister = async () => {
+    if(!modals.pay) return;
+    await api('/register', 'POST', {
+      eventId: modals.pay.id, userId: user.uid, userName: user.displayName, userEmail: user.email,
+      amount: modals.pay.price, status: modals.pay.price > 0 ? 'paid' : 'registered'
+    });
+    setModals({...modals, pay: null});
+    alert("Registration Successful!");
+  };
 
-            if (res.status === 'OTP_REQUIRED') { 
-                const otp = prompt("Enter OTP sent to Email:"); 
-                if(otp) {
-                    const otpRes = await api.verifyOtp(data.email, otp);
-                    if(otpRes.status === 'SUCCESS') { setUser(otpRes.user); setView('dashboard'); }
-                    else alert(otpRes.error);
-                }
-            } else if (res.user) { 
-                setUser(res.user); setView('dashboard'); 
-            } else {
-                throw new Error("Unknown Auth Error");
-            }
-        } catch(e: any) { alert(e.message); }
-    };
+  const requestAdmin = async (key: string) => {
+    const res = await api('/admin/request-otp', 'POST', { uid: user.uid, key });
+    if(res.success) alert(`OTP Sent (Demo: ${res.debug_otp})`);
+    else alert("Invalid Key");
+  };
 
-    return (
-        <div className="min-h-screen flex flex-col bg-[#f4f7f6]">
-            <Header user={user} setView={setView} logout={() => setUser(null)} />
-            {view === 'home' && (
-                <div className="flex-grow max-w-7xl mx-auto px-4 py-12">
-                   <h1 className="text-4xl font-bold text-center mb-12 text-[#003366]">Upcoming Events</h1>
-                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       {events.map((ev: any) => (
-                           <div key={ev.id} className="bg-white p-6 rounded shadow border-l-4 border-[#003366]">
-                               <h3 className="font-bold text-lg">{ev.title}</h3>
-                               <p className="text-sm text-gray-500">{ev.description}</p>
-                           </div>
-                       ))}
-                   </div>
-                </div>
-            )}
-            {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
-            {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
-            {view === 'dashboard' && user && <Dashboard user={user} setUser={setUser} logout={() => setUser(null)} />}
-            <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
+  const verifyAdmin = async (code: string) => {
+    const res = await api('/admin/verify-otp', 'POST', { uid: user.uid, code });
+    if(res.success) { localStorage.setItem(`role_${user.uid}`, 'admin'); setRole('admin'); setModals({...modals, verify: false}); alert("Success!"); } 
+    else alert("Invalid OTP");
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 font-sans text-gray-800 flex flex-col">
+      <Header setPage={setPage} />
+      <Navbar setPage={setPage} active={page} />
+
+      {page === 'home' && (
+        <div className="flex-1">
+          <div className="bg-gray-300 h-[350px] relative overflow-hidden flex items-center justify-center">
+            <div className="text-center text-white px-4 z-10">
+              <h2 className="text-4xl font-bold mb-2 text-shadow">CIPET : IPT AHMEDABAD</h2>
+              <p className="text-lg">Excellence in Polymer Technology & Education</p>
+            </div>
+            <div className="absolute inset-0 bg-[#002147] opacity-80"></div>
+          </div>
+          <div className="bg-[#004a80] text-white h-10 flex items-center shadow-inner overflow-hidden">
+            <div className="bg-[#d35400] h-full px-4 flex items-center font-bold text-xs z-10">NEWS</div>
+            <div className="flex-1 relative h-full"><div className="absolute top-2 w-full whitespace-nowrap animate-marquee text-sm font-medium">{events.length?events.map(e=>` || ${e.title} `):" || Admissions Open 2025 || "}</div></div>
+          </div>
+          <div className="max-w-7xl mx-auto px-4 py-12 grid md:grid-cols-3 gap-8">
+            <div className="bg-white border-t-4 border-[#005b9f] shadow p-6 text-center">
+              <h3 className="font-bold text-[#005b9f] border-b pb-2 mb-4">Quick Access</h3>
+              <p className="text-sm text-gray-500 mb-4">Access dashboard for notices and payments.</p>
+              <button onClick={()=>setPage('student')} className="w-full bg-[#005b9f] text-white py-2 rounded font-bold text-sm">Go to Student Corner</button>
+            </div>
+            <div className="md:col-span-2 bg-white border-t-4 border-[#d35400] shadow p-6">
+              <h3 className="font-bold text-[#d35400] border-b pb-2 mb-4 flex justify-between"><span>Notices & Events</span><button onClick={()=>setPage('notices')} className="text-[10px] bg-[#d35400] text-white px-2 rounded">VIEW ALL</button></h3>
+              <div className="divide-y">{events.slice(0,4).map((e:any) => (<div key={e.id} className="py-3 flex gap-3"><div className="bg-gray-100 p-2 text-center rounded min-w-[50px]"><div className="text-xs font-bold text-gray-500">{new Date(e.date).getDate()}</div></div><div><div className="text-sm font-bold text-[#005b9f]">{e.title}</div></div></div>))}</div>
+            </div>
+          </div>
         </div>
-    );
-};
+      )}
 
-export default App;
+      {page === 'student' && (
+        <div className="flex-1 max-w-7xl mx-auto w-full px-4 py-8">
+          {!user ? (
+            <div className="flex justify-center py-20"><div className="bg-white p-8 rounded shadow text-center max-w-md w-full"><h3 className="font-bold mb-4 text-[#005b9f]">Student / Faculty Portal</h3><button onClick={()=>setModals({...modals, auth:true})} className="w-full bg-[#005b9f] text-white px-6 py-2 rounded font-bold">Login / Sign Up</button></div></div>
+          ) : (
+            <div className="flex flex-col md:flex-row gap-8">
+              <div className="w-full md:w-64 flex-shrink-0">
+                <div className="bg-white border rounded shadow p-4 mb-4">
+                  <h3 className="font-bold text-[#005b9f] border-b pb-2 mb-2">Profile</h3>
+                  <div className="text-sm font-medium">{user.displayName}</div>
+                  <div className="text-xs text-gray-500 break-all">{user.email}</div>
+                  <div className="mt-2 text-[10px] bg-orange-100 inline-block px-2 py-0.5 rounded font-bold">{role.toUpperCase()}</div>
+                  {role === 'student' && <button onClick={()=>setModals({...modals, verify:true})} className="mt-4 w-full border text-xs py-1 hover:bg-gray-50 flex items-center justify-center gap-1"><Shield className="w-3 h-3"/> Faculty Access</button>}
+                </div>
+                <div className="bg-white border rounded shadow overflow-hidden text-sm font-medium text-gray-600"><button onClick={()=>signOut(auth)} className="w-full text-left px-4 py-3 hover:bg-gray-50 text-red-500 border-t">Sign Out</button></div>
+              </div>
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{role==='admin' ? 'Admin Control' : 'Student Dashboard'}</h2>
+                {role==='admin' ? <AdminDashboard events={events} setEvents={setEvents} /> : (
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className="bg-white p-6 rounded shadow border-l-4 border-green-500"><div className="text-xs font-bold text-gray-400 uppercase">Attendance</div><div className="text-3xl font-bold text-green-600 mt-1">89%</div></div>
+                    <div className="bg-white p-6 rounded shadow border-l-4 border-blue-500 cursor-pointer" onClick={()=>setPage('notices')}><div className="text-xs font-bold text-gray-400 uppercase">Active Notices</div><div className="text-3xl font-bold text-blue-600 mt-1">{events.length}</div></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {page === 'notices' && (
+        <div className="max-w-6xl mx-auto px-4 py-8 w-full flex-1">
+          <h2 className="text-2xl font-bold text-[#005b9f] mb-6 border-b pb-2">Notices Board</h2>
+          <div className="bg-white border rounded shadow overflow-hidden">
+            <div className="bg-gray-100 p-3 border-b grid grid-cols-12 text-xs font-bold text-gray-600 uppercase gap-4"><div className="col-span-2">Date</div><div className="col-span-6">Subject</div><div className="col-span-2">Type</div><div className="col-span-2 text-right">Action</div></div>
+            {events.map((e:any) => (
+              <div key={e.id} className="p-4 border-b hover:bg-blue-50 grid grid-cols-12 items-center text-sm gap-4">
+                <div className="col-span-2 text-xs font-bold text-gray-500">{new Date(e.date).toLocaleDateString()}</div>
+                <div className="col-span-6 font-bold text-[#005b9f]">{e.title}</div>
+                <div className="col-span-2"><span className="bg-gray-100 text-xs px-2 py-1 rounded">{e.type}</span></div>
+                <div className="col-span-2 text-right">
+                  <button onClick={()=>user?setModals({...modals, pay:e}):setModals({...modals, auth:true})} className={`text-white text-xs px-3 py-1 rounded font-bold ${e.price>0?'bg-[#d35400]':'bg-green-600'}`}>{e.price > 0 ? `Pay ₹${e.price}` : 'Register'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <footer className="bg-[#003366] text-white py-4 mt-auto text-center text-sm"><p>© 2024 {CONFIG.name}.</p></footer>
+
+      {modals.auth && <AuthModal onClose={()=>setModals({...modals,auth:false})} onSuccess={()=>{setModals({...modals,auth:false});}} />}
+      
+      {modals.verify && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white w-full max-w-sm rounded p-6 shadow-lg">
+            <h3 className="font-bold text-[#005b9f] mb-4">Faculty Verification</h3>
+            <div className="space-y-4">
+              <input id="key_in" placeholder="Faculty Key (Demo: CIPET_ADMIN)" className="w-full border p-2 text-sm" />
+              <button onClick={() => { 
+                const k = (document.getElementById('key_in') as HTMLInputElement).value;
+                requestAdmin(k); 
+              }} className="w-full bg-[#005b9f] text-white py-2 rounded text-sm">Request OTP</button>
+              
+              <div className="border-t pt-4">
+                <input id="otp_in" placeholder="Enter OTP" className="w-full border p-2 mb-2 text-sm" />
+                <button onClick={()=>{
+                  const o = (document.getElementById('otp_in') as HTMLInputElement).value;
+                  verifyAdmin(o);
+                }} className="w-full bg-green-600 text-white py-2 rounded text-sm">Verify & Access</button>
+              </div>
+            </div>
+            <button onClick={()=>setModals({...modals,verify:false})} className="text-xs text-gray-400 mt-4 w-full text-center">Cancel</button>
+          </div>
+        </div>
+      )}
+      
+      {modals.pay && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"><div className="bg-white p-6 rounded shadow-lg text-center max-w-sm w-full"><h3 className="font-bold mb-4">{modals.pay.title}</h3><p className="text-xl font-bold text-[#d35400] mb-4">{modals.pay.price > 0 ? `₹${modals.pay.price}` : 'Free'}</p><button onClick={handleRegister} className="w-full bg-green-600 text-white py-2 rounded font-bold">Confirm</button><button onClick={()=>setModals({...modals,pay:null})} className="mt-4 text-xs text-gray-400 underline">Cancel</button></div></div>
+      )}
+      <style>{`.animate-marquee { animation: marquee 20s linear infinite; } @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }`}</style>
+    </div>
+  );
+}
