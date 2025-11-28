@@ -15,30 +15,13 @@ import {
     signInWithEmailAndPassword, 
     signOut,
     Auth, 
-    UserCredential 
+    UserCredential,
+    onAuthStateChanged
 } from 'firebase/auth';
-import { 
-    getFirestore, 
-    doc, 
-    setDoc, 
-    getDoc, 
-    collection, 
-    query, 
-    onSnapshot, 
-    updateDoc, 
-    arrayUnion, 
-    deleteDoc,
-    QueryDocumentSnapshot,
-    serverTimestamp,
-    Firestore
-} from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage';
+// Removed Firestore/Storage imports
 
 // --- CONFIGURATION ---
-// Removed API_BASE_URL and the api service layer completely.
-// NOTE ON SECURITY: Since the Worker is removed, the Super Admin secret check
-// is performed client-side (insecure). This should be replaced with a Cloud 
-// Function/backend API for production security.
+const API_BASE_URL = "/api"; // Proxy to Worker
 
 // User's provided Firebase configuration
 const firebaseConfig = {
@@ -46,7 +29,7 @@ const firebaseConfig = {
   authDomain: "savvy-fountain-372005.firebaseapp.com",
   databaseURL: "https://savvy-fountain-372005-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "savvy-fountain-372005",
-  storageBucket: "savvy-fountain-372005.firebasestorage.app", // Used for Firebase Storage
+  storageBucket: "savvy-fountain-372005.firebasestorage.app", 
   messagingSenderId: "481989168469",
   appId: "1:481989168469:web:1811072ec0ee37fecc33dc",
   measurementId: "G-1RLVVBZ1YM" 
@@ -54,43 +37,50 @@ const firebaseConfig = {
 
 const isConfigured = !!firebaseConfig.apiKey;
 
-// --- FIRESTORE/STORAGE FUNCTIONS ---
-
-const createOrUpdateUserInFirestore = async (db: Firestore, userAuth: any, userData: any = {}) => {
-    const userRef = doc(db, "users", userAuth.uid);
-    const docSnap = await getDoc(userRef);
-    
-    const baseUserData = {
-        uid: userAuth.uid,
-        email: userAuth.email,
-        name: userAuth.displayName || userData.name || 'User',
-        branch: userData.branch || 'General',
-    };
-
-    if (docSnap.exists()) {
-        const existingData = docSnap.data();
-        // Update name/branch if coming from a signup/sync attempt
-        await updateDoc(userRef, {
-            name: baseUserData.name,
-            branch: baseUserData.branch
-        });
-        return { ...existingData, ...baseUserData };
-    } else {
-        // New user signup
-        const initialRole = userData.role || 'student';
-        const initialData = {
-            ...baseUserData,
-            role: initialRole, // Role set at signup
-            upgrade_status: 'none',
-            createdAt: serverTimestamp(),
-        };
-        await setDoc(userRef, initialData);
-        return initialData;
+// --- WORKER API SERVICE LAYER (Restored) ---
+const fetchJson = async (url: string, options: any = {}) => {
+    try {
+        const res = await fetch(url, options);
+        const contentType = res.headers.get("content-type");
+        
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || `Server Error: ${res.status}`);
+            return json;
+        } else {
+            const text = await res.text(); 
+            if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
+            return {};
+        }
+    } catch (err: any) {
+        console.error("API Error:", err);
+        throw err;
     }
 };
 
+const api = {
+    // Auth & User Sync (Worker handles role assignment/lookup, Super Admin OTP)
+    syncUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/sync`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    loginUser: (data: any) => fetchJson(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    verifyOtp: (data: any) => fetchJson(`${API_BASE_URL}/auth/verify-otp`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    
+    // Core Data/File Management (Worker handles D1/R2)
+    getEvents: () => fetchJson(`${API_BASE_URL}/events`),
+    createEvent: (fd: FormData) => fetchJson(`${API_BASE_URL}/events`, { method: 'POST', body: fd }),
+    getFiles: () => fetchJson(`${API_BASE_URL}/files`),
+    uploadFile: (file: File) => {
+        const fd = new FormData(); fd.append('file', file);
+        return fetchJson(`${API_BASE_URL}/files`, { method: 'PUT', body: fd });
+    },
+    deleteFile: (name: string) => fetchJson(`${API_BASE_URL}/files/${name}`, { method: 'DELETE' }),
+    updateProfile: (data: any) => fetchJson(`${API_BASE_URL}/user/profile`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }),
+    requestUpgrade: (id: string) => fetchJson(`${API_BASE_URL}/user/upgrade`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) }),
+    getUpgrades: () => fetchJson(`${API_BASE_URL}/admin/upgrades`),
+    approveUpgrade: (userId: string, secret: string) => fetchJson(`${API_BASE_URL}/admin/approve`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId, secret}) }),
+};
+
 // --- COMPONENTS ---
-// Note: Components are updated to use Firestore logic passed via props.
+// Note: Components reverted to API calls and use simple useState for data.
 
 const Header = ({ user, setView, logout }: any) => {
     
@@ -126,6 +116,7 @@ const Header = ({ user, setView, logout }: any) => {
     );
 };
 
+// Simplified component logic after removing Firestore dependency
 const Auth = ({ mode, setView, onAuth }: any) => {
     const [data, setData] = useState({ email: '', password: '', name: '', branch: 'STC', roleType: 'student', secretCode: '' });
     const [error, setError] = useState('');
@@ -176,7 +167,6 @@ const Auth = ({ mode, setView, onAuth }: any) => {
                                 <select className="w-full border p-2 rounded bg-white" value={data.branch} onChange={e => setData({...data, branch: e.target.value})}><option>STC</option><option>DIPLOMA</option><option>BE</option></select>
                                 <select className="w-full border p-2 rounded bg-white" value={data.roleType} onChange={e => setData({...data, roleType: e.target.value})}><option value="student">Student</option><option value="event_admin">Admin</option><option value="super_admin">Super Admin</option></select>
                             </div>
-                            {/* Security Note: In a real app, this secret code validation MUST be done on the server (Cloud Function). */}
                             {(data.roleType === 'event_admin' || data.roleType === 'super_admin') && (
                                 <input type="password" placeholder="Admin Secret Code" className="w-full border border-red-300 p-2 rounded bg-red-50" onChange={e => setData({...data, secretCode: e.target.value})} required />
                             )}
@@ -197,7 +187,7 @@ const Auth = ({ mode, setView, onAuth }: any) => {
     );
 };
 
-const ProfileEditor = ({ user, onUpdate, db }: any) => {
+const ProfileEditor = ({ user, onUpdate }: any) => {
     const [data, setData] = useState({ ...user });
     const [isSaving, setIsSaving] = useState(false);
     const [saveMessage, setSaveMessage] = useState('');
@@ -206,12 +196,7 @@ const ProfileEditor = ({ user, onUpdate, db }: any) => {
         setIsSaving(true);
         setSaveMessage('');
         try {
-            const userRef = doc(db, "users", user.uid);
-            await updateDoc(userRef, {
-                name: data.name,
-                phone: data.phone || '',
-                branch: data.branch
-            });
+            await api.updateProfile(data);
             onUpdate(data);
             setSaveMessage('Profile Updated Successfully!');
         } catch(e: any) { 
@@ -243,43 +228,34 @@ const ProfileEditor = ({ user, onUpdate, db }: any) => {
     );
 };
 
-const AdminApprovals = ({ db }: any) => {
+const AdminApprovals = () => {
     const [reqs, setReqs] = useState<any[]>([]);
     const [secret, setSecret] = useState('');
     const [message, setMessage] = useState('');
 
-    useEffect(() => {
-        if (!db) return;
-        const q = query(collection(db, "users")); 
-        
-        // This watches all users and filters client-side, replace with proper query in production
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const pendingReqs = snapshot.docs
-                .map(doc => ({ id: doc.id, ...doc.data() }))
-                .filter(u => u.upgrade_status === 'pending');
-            setReqs(pendingReqs);
-        }, (error) => {
-            setMessage(`Error loading approvals: ${error.message}`);
-        });
+    const fetchUpgrades = () => {
+        api.getUpgrades()
+            .then(data => { 
+                if(Array.isArray(data)) setReqs(data); 
+                setMessage('');
+            })
+            .catch(e => setMessage(`Error fetching requests: ${e.message}`));
+    };
 
-        return () => unsubscribe();
-    }, [db]);
+    useEffect(() => { fetchUpgrades(); }, []);
 
-    const handleApprove = async (userUid: string) => {
+    const handleApprove = async (userId: string) => {
         setMessage('');
-        // NOTE: In a real app, this approval logic must run on a secure server/worker/cloud function.
-        if (secret !== 'SUPER_ADMIN_SECRET') { // Using a placeholder key
-            setMessage("Invalid Secret. Approval failed.");
+        if (!secret) {
+            setMessage("Please enter the Admin Secret Key first.");
             return;
         }
 
         try {
-            const userRef = doc(db, "users", userUid);
-            await updateDoc(userRef, {
-                role: 'event_admin',
-                upgrade_status: 'approved'
-            });
-            setMessage(`User ${userUid} Upgraded Successfully!`); 
+            // Worker endpoint handles secret validation and D1 update
+            await api.approveUpgrade(userId, secret);
+            setMessage(`User ${userId} Upgraded Successfully!`); 
+            fetchUpgrades();
         } catch(e: any) { 
             setMessage(`Error approving user: ${e.message}`);
         }
@@ -291,7 +267,7 @@ const AdminApprovals = ({ db }: any) => {
                 <h3 className="font-bold text-lg flex items-center gap-2"><ShieldAlert className="text-red-500"/> Pending Upgrade Requests</h3>
                 <input 
                     type="password" 
-                    placeholder="Admin Secret Key (Placeholder)" 
+                    placeholder="Admin Secret Key (Worker)" 
                     className="border p-2 rounded text-xs w-full sm:w-48 bg-red-50" 
                     onChange={e => setSecret(e.target.value)} 
                     value={secret}
@@ -310,7 +286,7 @@ const AdminApprovals = ({ db }: any) => {
                             <td className="p-2">{u.name}</td>
                             <td className="p-2">{u.email}</td>
                             <td className="p-2">{u.branch}</td>
-                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold disabled:opacity-50" disabled={secret !== 'SUPER_ADMIN_SECRET'}>Approve</button></td>
+                            <td className="p-2"><button onClick={() => handleApprove(u.id)} className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold disabled:opacity-50" disabled={!secret}>Approve</button></td>
                         </tr>
                     ))}
                     {reqs.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-gray-400">No pending requests.</td></tr>}
@@ -320,24 +296,18 @@ const AdminApprovals = ({ db }: any) => {
     );
 };
 
-const EventManager = ({ user, db, storage }: any) => {
+const EventManager = ({ user }: any) => {
     const [showCreate, setShowCreate] = useState(false);
     const [message, setMessage] = useState('');
     const [events, setEvents] = useState<any[]>([]);
 
-    // Real-time listener for events
-    useEffect(() => { 
-        if (!db) return;
-        const q = query(collection(db, "events"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setEvents(fetchedEvents);
-        }, (error) => {
-            setMessage(`Error loading events: ${error.message}`);
-        });
+    const fetchEvents = () => {
+        api.getEvents()
+            .then(data => { if(Array.isArray(data)) setEvents(data); })
+            .catch(e => setMessage(`Error fetching events: ${e.message}`));
+    };
 
-        return () => unsubscribe();
-    }, [db]);
+    useEffect(() => { fetchEvents(); }, []);
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -345,33 +315,13 @@ const EventManager = ({ user, db, storage }: any) => {
         const form = e.target as HTMLFormElement;
         const fd = new FormData(form);
         
-        const file = fd.get('attachment') as File | null;
-        let attachmentUrl = null;
-
         try {
-            if (file && file.size > 0) {
-                const storageRef = ref(storage, `attachments/${Date.now()}-${file.name}`);
-                const snapshot = await uploadBytes(storageRef, file);
-                attachmentUrl = await getDownloadURL(snapshot.ref);
-            }
-            
-            const isPaidInput = form.querySelector('input[name="isPaid"]') as HTMLInputElement;
-
-            // Add document to Firestore
-            await setDoc(doc(collection(db, "events")), {
-                title: fd.get('title'),
-                date: fd.get('date'),
-                branch: fd.get('branch'),
-                fee: parseFloat(fd.get('fee') as string || '0'),
-                is_paid: isPaidInput.checked,
-                description: fd.get('desc'),
-                attachment_url: attachmentUrl,
-                created_by_email: user.email,
-                createdAt: serverTimestamp(),
-            });
+            // Worker API handles file upload and D1 insertion
+            await api.createEvent(fd); 
 
             setMessage("Event Posted Successfully!");
             setShowCreate(false);
+            fetchEvents();
             form.reset();
         } catch(e: any) {
             setMessage(`Error posting event: ${e.message}`);
@@ -412,9 +362,9 @@ const EventManager = ({ user, db, storage }: any) => {
                 {events.map((ev: any) => (
                     <div key={ev.id} className="bg-white p-4 rounded shadow border-l-4 border-[#fcb900]">
                         <h4 className="font-bold text-[#003366]">{ev.title}</h4>
-                        <p className="text-xs text-gray-500 mb-2">{new Date(ev.date?.toDate() || Date.now()).toLocaleDateString()} | Fee: ₹{ev.fee || '0'} {ev.is_paid ? '(Paid)' : '(Free)'}</p>
+                        <p className="text-xs text-gray-500 mb-2">{new Date(ev.date || Date.now()).toLocaleDateString()} | Fee: ₹{ev.fee || '0'} {ev.is_paid ? '(Paid)' : '(Free)'}</p>
                         <p className="text-sm line-clamp-2">{ev.description}</p>
-                        {ev.attachment_url && <a href={ev.attachment_url} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"><File size={14} /> Attachment</a>}
+                        {ev.attachment_url && <a href={`/api/files/${ev.attachment_url}`} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"><File size={14} /> Attachment</a>}
                     </div>
                 ))}
             </div>
@@ -422,25 +372,18 @@ const EventManager = ({ user, db, storage }: any) => {
     );
 };
 
-// FileManager and Dashboard components are now updated to use Firestore/Storage props
-const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
+const FileManager = ({ user }: any) => {
     const [files, setFiles] = useState<any[]>([]);
     const [message, setMessage] = useState('');
     const [uploading, setUploading] = useState(false);
 
-    // Real-time listener for file metadata stored in Firestore
-    useEffect(() => { 
-        if (!db) return;
-        const q = query(collection(db, "file_metadata"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedFiles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setFiles(fetchedFiles);
-        }, (error) => {
-            setMessage(`Error loading files: ${error.message}`);
-        });
+    const fetchFiles = () => {
+        api.getFiles()
+            .then(data => { if(Array.isArray(data)) setFiles(data); })
+            .catch(e => setMessage(`Error fetching files: ${e.message}`));
+    };
 
-        return () => unsubscribe();
-    }, [db]);
+    useEffect(() => { fetchFiles(); }, []);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         setMessage('');
@@ -449,21 +392,9 @@ const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
         if (file) { 
             setUploading(true);
             try {
-                // 1. Upload file to Firebase Storage
-                const storageRef = ref(storage, `user_files/${file.name}`);
-                const snapshot = await uploadBytes(storageRef, file);
-                const downloadURL = await getDownloadURL(snapshot.ref);
-
-                // 2. Store metadata in Firestore
-                await setDoc(doc(collection(db, "file_metadata")), {
-                    name: file.name,
-                    size: file.size,
-                    storagePath: snapshot.metadata.fullPath,
-                    url: downloadURL,
-                    uploadedAt: serverTimestamp(),
-                });
-
+                await api.uploadFile(file); 
                 setMessage(`File ${file.name} uploaded successfully!`);
+                fetchFiles();
             } catch(e: any) {
                 setMessage(`Error uploading file: ${e.message}`);
             } finally {
@@ -472,29 +403,24 @@ const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
         }
     };
 
-    const handleDeleteFile = async (file: any) => {
-        if (window.prompt(`To confirm deletion of "${file.name}", type DELETE below:`) === 'DELETE') {
+    const handleDeleteFile = async (name: string) => {
+        if (window.prompt(`To confirm deletion of "${name}", type DELETE below:`) === 'DELETE') {
             try {
-                // 1. Delete file from Firebase Storage
-                const storageRef = ref(storage, file.storagePath);
-                await deleteObject(storageRef);
-
-                // 2. Delete metadata from Firestore
-                await deleteDoc(doc(db, "file_metadata", file.id));
-                
-                setMessage(`File ${file.name} deleted successfully!`);
+                await api.deleteFile(name);
+                setMessage(`File ${name} deleted successfully!`);
+                fetchFiles();
             } catch(e: any) {
                 setMessage(`Error deleting file: ${e.message}`);
             }
         } else {
-             setMessage(`Deletion of ${file.name} cancelled.`);
+             setMessage(`Deletion of ${name} cancelled.`);
         }
     };
 
     return (
         <div className="bg-white rounded shadow overflow-hidden border border-gray-200">
             <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-                <h3 className="font-bold flex items-center gap-2"><Folder size={18} /> Cloud Files (Firebase Storage)</h3>
+                <h3 className="font-bold flex items-center gap-2"><Folder size={18} /> Cloud Files (R2)</h3>
                 <label className="bg-[#003366] text-white px-3 py-1 rounded text-sm cursor-pointer flex gap-1 items-center hover:bg-blue-900 transition disabled:opacity-50" style={{ pointerEvents: uploading ? 'none' : 'auto' }}>
                     {uploading ? 'Uploading...' : <><Upload size={14}/> Upload</>}
                     <input type="file" className="hidden" onChange={handleUpload} disabled={uploading} />
@@ -507,14 +433,14 @@ const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
             )}
             <div className="divide-y divide-gray-100">
                 {files.map((f:any) => (
-                    <div key={f.id} className="p-3 text-sm flex justify-between items-center hover:bg-gray-50">
+                    <div key={f.name} className="p-3 text-sm flex justify-between items-center hover:bg-gray-50">
                         <span className="flex gap-2 items-center">
                             <FileText size={16} className="text-[#003366]"/> 
-                            <a href={f.url} target="_blank" className="text-blue-600 hover:underline">{f.name}</a>
+                            <a href={`/api/files/${f.name}`} target="_blank" className="text-blue-600 hover:underline">{f.name}</a>
                         </span>
                         <div className="flex items-center gap-4">
                             <span className="text-gray-500 text-xs">{Math.round(f.size / 1024)} KB</span>
-                            <button onClick={() => handleDeleteFile(f)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100"><Trash2 size={16}/></button>
+                            <button onClick={() => handleDeleteFile(f.name)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100"><Trash2 size={16}/></button>
                         </div>
                     </div>
                 ))}
@@ -525,15 +451,15 @@ const FileManager = ({ db, storage }: { db: Firestore, storage: any }) => {
 };
 
 
-const Dashboard = ({ user, setUser, logout, db, storage }: any) => {
+const Dashboard = ({ user, setUser, logout }: any) => {
     const [activeTab, setActiveTab] = useState('overview');
 
     const handleUpgrade = async () => {
          const confirmation = window.prompt("Type 'CONFIRM' to request an upgrade to Event Admin role:");
          if(confirmation === 'CONFIRM') {
              try {
-                const userRef = doc(db, "users", user.uid);
-                await updateDoc(userRef, { upgrade_status: 'pending' });
+                // Worker API handles upgrade request
+                await api.requestUpgrade(user.id);
                 setUser({...user, upgrade_status: 'pending'});
                 window.alert("Request sent! An admin will review it soon.");
              } catch (e: any) { 
@@ -574,7 +500,7 @@ const Dashboard = ({ user, setUser, logout, db, storage }: any) => {
             <div className="flex-1">
                 <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">{activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
 
-                {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} db={db} />}
+                {activeTab === 'profile' && <ProfileEditor user={user} onUpdate={(u: any) => setUser({...user, ...u})} />}
                 
                 {activeTab === 'overview' && (
                     <div className="space-y-6">
@@ -592,9 +518,9 @@ const Dashboard = ({ user, setUser, logout, db, storage }: any) => {
                     </div>
                 )}
 
-                {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals db={db} />}
-                {activeTab === 'events' && (user.role === 'super_admin' || user.role === 'event_admin') && <EventManager user={user} db={db} storage={storage} />}
-                {activeTab === 'files' && user.role === 'super_admin' && <FileManager db={db} storage={storage} />}
+                {activeTab === 'approvals' && user.role === 'super_admin' && <AdminApprovals />}
+                {activeTab === 'events' && (user.role === 'super_admin' || user.role === 'event_admin') && <EventManager user={user} />}
+                {activeTab === 'files' && user.role === 'super_admin' && <FileManager user={user} />}
             </div>
         </div>
     );
@@ -607,7 +533,7 @@ const App = () => {
 
     // --- FIREBASE SERVICE STATES ---
     const [authInitialized, setAuthInitialized] = useState(false);
-    const [firebaseServices, setFirebaseServices] = useState<{ auth: Auth | null, provider: GoogleAuthProvider | null, db: Firestore | null, storage: any }>({ auth: null, provider: null, db: null, storage: null });
+    const [firebaseServices, setFirebaseServices] = useState<{ auth: Auth | null, provider: GoogleAuthProvider | null }>({ auth: null, provider: null });
 
     // --- INITIALIZATION ---
     useEffect(() => {
@@ -617,13 +543,12 @@ const App = () => {
         }
 
         try {
+            // Only initialize Auth services
             const app = initializeApp(firebaseConfig);
             const auth = getAuth(app); 
-            const db = getFirestore(app);
-            const storage = getStorage(app);
             const provider = new GoogleAuthProvider();
             
-            setFirebaseServices({ auth, provider, db, storage });
+            setFirebaseServices({ auth, provider });
             setAuthInitialized(true);
         } catch (e) {
             console.error("FATAL: Firebase initialization failed.", e);
@@ -632,21 +557,15 @@ const App = () => {
     }, []); 
 
     // --- EVENT LISTENER (for home page) ---
-    const { db } = firebaseServices;
     useEffect(() => { 
-        if (!db) return;
-        const q = query(collection(db, "events"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setEvents(fetchedEvents.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)));
-        }, (error) => {
-            console.error("Error loading events for home page:", error.message);
-        });
-        return () => unsubscribe();
-    }, [db]);
+        // Fetch events from Worker API
+        api.getEvents().then(data => { 
+            if(Array.isArray(data)) setEvents(data); 
+        }).catch(e => console.error("Error fetching initial events:", e)); 
+    }, []);
 
     // Use memoized values for ease of access and dependency tracking
-    const { auth: authInstance, provider: googleProvider, storage } = firebaseServices;
+    const { auth: authInstance, provider: googleProvider } = firebaseServices;
 
     // Helper to determine the correct view based on the user's role
     const getRoleBasedView = (role: string) => {
@@ -656,28 +575,44 @@ const App = () => {
         return 'home';
     };
 
-    // --- AUTH STATE PERSISTENCE & REDIRECTION ---
+    // --- AUTH STATE PERSISTENCE & REDIRECTION (Worker API Based) ---
     useEffect(() => {
-        if (!authInitialized || !authInstance || !db) return;
+        if (!authInitialized || !authInstance) return;
 
-        // 1. Listen for Firebase Auth State Changes
-        const unsubscribeAuth = authInstance.onAuthStateChanged(async (userAuth) => {
+        // Listen for Firebase Auth State Changes
+        const unsubscribeAuth = onAuthStateChanged(authInstance, async (userAuth) => {
             if (userAuth) {
-                // 2. Fetch user data (roles, etc.) from Firestore
-                const userRef = doc(db, "users", userAuth.uid);
-                const docSnap = await getDoc(userRef);
+                // Worker API Sync: Get the full D1 profile (role, name, etc.)
+                try {
+                    const syncData = { 
+                        uid: userAuth.uid, 
+                        email: userAuth.email, 
+                        name: userAuth.displayName,
+                        // Pass any other necessary data for initial sync
+                    };
+                    
+                    const res = await api.syncUser(syncData);
 
-                if (docSnap.exists()) {
-                    const userData = { uid: userAuth.uid, email: userAuth.email, ...docSnap.data() };
-                    setUser(userData);
-                    setView(getRoleBasedView(userData.role));
-                } else {
-                    // New Auth user detected but no Firestore profile (e.g., first-time sign in/refresh)
-                    // We set minimal data.
-                    setUser({ uid: userAuth.uid, email: userAuth.email, role: 'student', name: userAuth.displayName || 'User' });
-                    setView(getRoleBasedView('student'));
+                    if (res.error) throw new Error(res.error);
+                    if (res.user) {
+                         // Successfully synchronized D1 profile data
+                        const userData = { ...userAuth, ...res.user }; 
+                        setUser(userData);
+                        setView(getRoleBasedView(userData.role));
+                    } else {
+                        // If sync fails but Firebase session exists, log out.
+                        console.error("User synchronized but missing role data. Logging out.");
+                        await signOut(authInstance);
+                    }
+
+                } catch(e) {
+                    // Critical failure during API sync. Log out.
+                    console.error("API Sync failed during login/refresh. Logging out.", e);
+                    await signOut(authInstance);
                 }
+
             } else {
+                // User signed out
                 setUser(null);
                 if (view !== 'home' && view !== 'login' && view !== 'signup') {
                     setView('home');
@@ -685,78 +620,102 @@ const App = () => {
             }
         });
         return () => unsubscribeAuth();
-    }, [authInitialized, authInstance, db]);
+    }, [authInitialized, authInstance]);
     // --- END AUTH STATE PERSISTENCE & REDIRECTION ---
 
     const handleAuth = async (mode: string, data: any) => {
-        if (!authInitialized || !authInstance || !googleProvider || !db) {
+        if (!authInitialized || !authInstance || !googleProvider) {
              throw new Error("Initialization Error: Firebase SDK not available. Please wait and try again.");
         }
 
         try {
             let authResult: UserCredential;
-            let userProfile;
+            let res;
             
             if (mode === 'google') {
                 authResult = await signInWithPopup(authInstance, googleProvider);
-                userProfile = await createOrUpdateUserInFirestore(db, authResult.user, data);
+                // The onAuthStateChanged listener handles the subsequent sync/redirection
+                
             }
             else if (mode === 'login') {
                 authResult = await signInWithEmailAndPassword(authInstance, data.email, data.password);
                 
-                // --- SUPER ADMIN LOGIN CLIENT-SIDE SECRET CHECK ---
+                // --- SUPER ADMIN LOGIN SECURE FLOW ---
                 if (data.email.toLowerCase() === 'superadmin@cipet.edu') {
                     
-                    // NOTE: This check is INSECURE and is necessary because the Worker/EmailJS dependency was removed.
-                    const superAdminSecret = window.prompt("Enter the Master Secret Key for Super Admin access:"); 
+                    // 1. Trigger OTP email send in the Worker (API call)
+                    const triggerRes = await api.loginUser({ email: data.email, password: data.password }); 
                     
-                    if(superAdminSecret !== 'MASTER_SECRET_KEY_PLACEHOLDER') { // Replace with a hardcoded or runtime secret
+                    if(triggerRes.status !== 'OTP_REQUIRED') {
                          await signOut(authInstance);
-                         throw new Error("INCORRECT MASTER SECRET KEY.");
+                         throw new Error(triggerRes.error || "Failed to trigger OTP process in Worker.");
                     }
                     
-                    // Secret successful, set/merge super admin role in Firestore
-                    const userRef = doc(db, "users", authResult.user.uid);
-                    await setDoc(userRef, {
-                        uid: authResult.user.uid,
-                        email: authResult.user.email,
-                        name: "Super Admin",
-                        role: "super_admin", 
-                        branch: "ADMIN",
-                        upgrade_status: 'approved'
-                    }, { merge: true });
-
-                    userProfile = { uid: authResult.user.uid, email: authResult.user.email, name: "Super Admin", role: "super_admin", branch: "ADMIN" };
+                    // 2. Prompt for OTP
+                    const otp = window.prompt("Enter OTP sent to your email:"); 
+                    
+                    if(otp) {
+                         // 3. Verify OTP using Worker API
+                         const otpRes = await api.verifyOtp({ email: data.email, otp });
                          
-                } else {
-                    // Normal user login: fetch profile from Firestore
-                    const userRef = doc(db, "users", authResult.user.uid);
-                    const docSnap = await getDoc(userRef);
-                    if (docSnap.exists()) {
-                        userProfile = { uid: authResult.user.uid, email: authResult.user.email, ...docSnap.data() };
+                         if(otpRes.status !== 'SUCCESS') { 
+                            await signOut(authInstance);
+                            throw new Error(otpRes.error || "OTP verification failed.");
+                         }
+                         
+                         // 4. OTP successful, sync the user session (onAuthStateChanged handles final state update/redirection)
+                         // NOTE: The Firebase session already exists, we just need to ensure the worker set the appropriate D1 state.
+                         
                     } else {
                         await signOut(authInstance);
-                        throw new Error("User profile missing in database. Please sign up.");
+                        throw new Error("OTP verification cancelled.");
                     }
                 }
+                // The onAuthStateChanged listener handles the subsequent sync/redirection for all logins
             }
-            else { // signup
-                // Check if user signing up for admin role knows the general admin secret code.
-                const targetRole = data.roleType;
-                if ((targetRole === 'event_admin' || targetRole === 'super_admin') && data.secretCode !== 'ADMIN_SIGNUP_SECRET') {
+            else { // signup (register)
+                authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
+                
+                // 1. Worker needs to handle role assignment/secret check during signup.
+                if ((data.roleType === 'event_admin' || data.roleType === 'super_admin') && data.secretCode !== 'ADMIN_SIGNUP_SECRET') {
+                    // This local check is insecure, but serves as a quick barrier.
+                    // The Worker MUST perform the secure validation.
+                    await signOut(authInstance);
                     throw new Error("Invalid Admin Signup Secret Code.");
                 }
+
+                // 2. Worker performs D1 creation and initial role assignment.
+                const signupRes = await fetchJson(`${API_BASE_URL}/auth/register`, { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({
+                        uid: authResult.user.uid,
+                        email: data.email,
+                        name: data.name,
+                        branch: data.branch,
+                        roleType: data.roleType,
+                        secretCode: data.secretCode
+                    })
+                });
                 
-                authResult = await createUserWithEmailAndPassword(authInstance, data.email, data.password);
-                userProfile = await createOrUpdateUserInFirestore(db, authResult.user, data);
+                if (signupRes.status !== 'SUCCESS') {
+                    await signOut(authInstance);
+                    throw new Error(signupRes.error || "Signup failed on the server.");
+                }
+
+                // The onAuthStateChanged listener handles the final sync/redirection
             }
 
-            // Final state update. The onAuthStateChanged listener handles the final persistence and redirection.
-            setUser(userProfile);
-            setView(getRoleBasedView(userProfile.role));
+            // The rest is handled by the onAuthStateChanged listener above, which fetches the final user profile from the Worker/D1.
 
         } catch(e: any) { 
             console.error("Auth Error:", e);
+            
+            // Crucial cleanup: Sign out of Firebase if Auth succeeded but Worker sync/validation failed
+            if (authInstance.currentUser) {
+                 await signOut(authInstance).catch(err => console.error("Error signing out after auth failure:", err));
+            }
+            
             let displayError = e.message;
             if (e.code && typeof e.code === 'string' && e.code.includes('auth/')) {
                 displayError = e.code.replace('auth/', '').replace(/-/g, ' ').toUpperCase();
@@ -783,7 +742,7 @@ const App = () => {
                 <div className="text-center p-8 bg-white rounded-lg shadow-xl border-t-4 border-[#003366]">
                     <svg className="animate-spin h-8 w-8 text-[#003366] mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                     <p className="font-semibold text-gray-700">Loading essential services...</p>
-                    <p className="text-xs text-gray-500 mt-1">Initializing Firebase (Auth, DB, Storage)</p>
+                    <p className="text-xs text-gray-500 mt-1">Initializing Firebase Authentication</p>
                 </div>
             </div>
         );
@@ -802,7 +761,7 @@ const App = () => {
                            <div key={ev.id} className="bg-white p-6 rounded-lg shadow-md border-t-4 border-[#003366] hover:shadow-xl transition duration-300">
                                <div className="flex items-center gap-3 mb-2">
                                     <Calendar size={18} className="text-[#fcb900]"/>
-                                    <p className="text-sm font-semibold text-gray-600">{new Date(ev.date?.toDate() || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
+                                    <p className="text-sm font-semibold text-gray-600">{new Date(ev.date || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
                                </div>
                                <h3 className="font-extrabold text-xl text-[#003366] mb-2">{ev.title}</h3>
                                <p className="text-sm text-gray-700 line-clamp-3">{ev.description}</p>
@@ -824,7 +783,7 @@ const App = () => {
             {view === 'login' && <Auth mode='login' setView={setView} onAuth={handleAuth} />}
             {view === 'signup' && <Auth mode='signup' setView={setView} onAuth={handleAuth} />}
             {/* RENDER DASHBOARD FOR ALL ROLE-BASED VIEWS */}
-            {isDashboardView && user && db && storage && <Dashboard user={user} setUser={setUser} logout={handleSignOut} db={db} storage={storage} />}
+            {isDashboardView && user && <Dashboard user={user} setUser={setUser} logout={handleSignOut} />}
             <footer className="bg-[#003366] text-white py-6 text-center text-sm mt-auto">© 2025 CIPET IPT Ahmedabad</footer>
         </div>
     );
