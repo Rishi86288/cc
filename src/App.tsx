@@ -7,7 +7,7 @@ import {
 
 // --- CONFIGURATION ---
 const USE_MOCK_API = true; // CHANGE TO FALSE for Production
-const API_BASE_URL = "https://cipet-backend.yourname.workers.dev"; // Replace with your Worker URL
+const API_BASE_URL = "vite-react-template.rishiforrdp6055.workers.dev"; // Replace with your Worker URL
 
 // --- MOCK DATA (For Demo Purposes) ---
 const MOCK_DATA = {
