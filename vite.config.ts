@@ -10,4 +10,9 @@ export default defineConfig({
       "@": resolve(__dirname, "./src"),
     },
   },
+  // ADD THIS BUILD SECTION
+  build: {
+    outDir: "dist",
+    sourcemap: true, // Helps debug errors in Cloudflare logs
+  }
 });
